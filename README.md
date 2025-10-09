@@ -30,12 +30,21 @@ pass rate  90.0%
 
 min        1.214s
 mean       1.432s
+median     1.398s
+p95        1.877s
 max        1.921s
+stddev     0.181s
+cv          12.6%
 
 failed runs
   run 7   exit 1
   run 15  exit 1
 ```
+
+The timing block shows the spread of run times: median and p95 use linear
+interpolation between samples, stddev is the sample standard deviation and cv
+(coefficient of variation, stddev / mean) makes the spread comparable between
+fast and slow commands.
 
 | Flag | Description |
 | --- | --- |

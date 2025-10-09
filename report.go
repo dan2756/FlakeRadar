@@ -6,16 +6,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/dan2756/flaky/internal/stats"
 )
 
 const labelWidth = 11
 
 func writeReport(w io.Writer, command string, results []result) {
 	var (
-		passes int
-		failed []result
-		total  time.Duration
-		lo, hi = results[0].duration, results[0].duration
+		passes  int
+		failed  []result
+		samples = make([]float64, 0, len(results))
 	)
 	for _, r := range results {
 		if r.passed() {
@@ -23,11 +25,8 @@ func writeReport(w io.Writer, command string, results []result) {
 		} else {
 			failed = append(failed, r)
 		}
-		total += r.duration
-		lo = min(lo, r.duration)
-		hi = max(hi, r.duration)
+		samples = append(samples, float64(r.duration))
 	}
-	mean := total / time.Duration(len(results))
 
 	field(w, "command", command)
 	field(w, "runs", strconv.Itoa(len(results)))
@@ -36,10 +35,7 @@ func writeReport(w io.Writer, command string, results []result) {
 	field(w, "pass rate", formatPercent(passes, len(results)))
 
 	fmt.Fprintln(w)
-	ds := formatDurations(mean, lo, mean, hi)
-	field(w, "min", ds[0])
-	field(w, "mean", ds[1])
-	field(w, "max", ds[2])
+	writeTiming(w, stats.Summarize(samples))
 
 	if len(failed) > 0 {
 		fmt.Fprintln(w)
@@ -48,6 +44,18 @@ func writeReport(w io.Writer, command string, results []result) {
 		for _, r := range failed {
 			fmt.Fprintf(w, "  run %-*d  exit %d\n", width, r.index, r.exitCode)
 		}
+	}
+}
+
+// writeTiming writes the duration statistics (in nanoseconds) as a column
+// of right-aligned values in a shared unit.
+func writeTiming(w io.Writer, s stats.Summary) {
+	labels := []string{"min", "mean", "median", "p95", "max", "stddev", "cv"}
+	values := formatDurations(s.Mean, s.Min, s.Mean, s.Median, s.P95, s.Max, s.Stddev)
+	values = append(values, strconv.FormatFloat(100*s.CV, 'f', 1, 64)+"%")
+	values = alignRight(values)
+	for i, label := range labels {
+		field(w, label, values[i])
 	}
 }
 
@@ -75,24 +83,31 @@ func formatPercent(n, total int) string {
 	return s + "%"
 }
 
-// formatDurations formats ds in one unit, picked to suit ref, and pads them
-// to a common width so they line up in a column.
-func formatDurations(ref time.Duration, ds ...time.Duration) []string {
+// formatDurations formats nanosecond values in one unit, picked to suit ref.
+func formatDurations(ref float64, ns ...float64) []string {
 	unit, suffix, prec := time.Second, "s", 3
 	switch {
-	case ref < time.Millisecond:
+	case ref < float64(time.Millisecond):
 		unit, suffix, prec = time.Microsecond, "µs", 1
-	case ref < time.Second:
+	case ref < float64(time.Second):
 		unit, suffix, prec = time.Millisecond, "ms", 1
 	}
-	out := make([]string, len(ds))
-	width := 0
-	for i, d := range ds {
-		out[i] = strconv.FormatFloat(float64(d)/float64(unit), 'f', prec, 64) + suffix
-		width = max(width, len(out[i]))
+	out := make([]string, len(ns))
+	for i, v := range ns {
+		out[i] = strconv.FormatFloat(v/float64(unit), 'f', prec, 64) + suffix
 	}
-	for i, s := range out {
-		out[i] = strings.Repeat(" ", width-len(s)) + s
+	return out
+}
+
+// alignRight pads values on the left to a common width.
+func alignRight(values []string) []string {
+	width := 0
+	for _, v := range values {
+		width = max(width, utf8.RuneCountInString(v))
+	}
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = strings.Repeat(" ", width-utf8.RuneCountInString(v)) + v
 	}
 	return out
 }
