@@ -8,24 +8,35 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/dan2756/flaky/internal/runner"
 	"github.com/dan2756/flaky/internal/stats"
 )
 
-const labelWidth = 11
+const (
+	labelWidth = 11
+	maxListed  = 20 // failed runs listed before the rest are summarized
+)
 
-func writeReport(w io.Writer, command string, results []result) {
+func writeReport(w io.Writer, command string, results []runner.Result) {
 	var (
-		passes  int
-		failed  []result
-		samples = make([]float64, 0, len(results))
+		passes   int
+		failed   []runner.Result
+		timedOut int
+		samples  = make([]float64, 0, len(results))
 	)
 	for _, r := range results {
-		if r.passed() {
+		if r.Passed() {
 			passes++
 		} else {
 			failed = append(failed, r)
 		}
-		samples = append(samples, float64(r.duration))
+		if r.TimedOut {
+			// Its duration is just the time limit; leave it out of the
+			// timing so it doesn't drag the numbers toward the limit.
+			timedOut++
+			continue
+		}
+		samples = append(samples, float64(r.Duration))
 	}
 
 	field(w, "command", command)
@@ -35,21 +46,21 @@ func writeReport(w io.Writer, command string, results []result) {
 	field(w, "pass rate", formatPercent(passes, len(results)))
 
 	fmt.Fprintln(w)
-	writeTiming(w, stats.Summarize(samples))
+	writeTiming(w, stats.Summarize(samples), timedOut)
 
 	if len(failed) > 0 {
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, "failed runs")
-		width := len(strconv.Itoa(failed[len(failed)-1].index))
-		for _, r := range failed {
-			fmt.Fprintf(w, "  run %-*d  exit %d\n", width, r.index, r.exitCode)
-		}
+		writeFailures(w, failed)
 	}
 }
 
 // writeTiming writes the duration statistics (in nanoseconds) as a column
 // of right-aligned values in a shared unit.
-func writeTiming(w io.Writer, s stats.Summary) {
+func writeTiming(w io.Writer, s stats.Summary, timedOut int) {
+	if s.N == 0 {
+		field(w, "timing", "n/a, every run timed out")
+		return
+	}
 	labels := []string{"min", "mean", "median", "p95", "max", "stddev", "cv"}
 	values := formatDurations(s.Mean, s.Min, s.Mean, s.Median, s.P95, s.Max, s.Stddev)
 	values = append(values, strconv.FormatFloat(100*s.CV, 'f', 1, 64)+"%")
@@ -57,6 +68,43 @@ func writeTiming(w io.Writer, s stats.Summary) {
 	for i, label := range labels {
 		field(w, label, values[i])
 	}
+	if timedOut > 0 {
+		field(w, "", fmt.Sprintf("(timing excludes %s)", plural(timedOut, "timed-out run")))
+	}
+}
+
+func writeFailures(w io.Writer, failed []runner.Result) {
+	fmt.Fprintln(w, "failed runs")
+	listed := failed[:min(len(failed), maxListed)]
+	statuses := make([]string, len(listed))
+	statusWidth := 0
+	for i, r := range listed {
+		statuses[i] = status(r)
+		statusWidth = max(statusWidth, len(statuses[i]))
+	}
+	indexWidth := len(strconv.Itoa(listed[len(listed)-1].Index))
+	for i, r := range listed {
+		fmt.Fprintf(w, "  run %-*d  %-*s  %s\n", indexWidth, r.Index,
+			statusWidth, statuses[i], formatDurations(float64(r.Duration), float64(r.Duration))[0])
+	}
+	if rest := len(failed) - len(listed); rest > 0 {
+		fmt.Fprintf(w, "  ... and %d more\n", rest)
+	}
+}
+
+// status describes how a failed run ended.
+func status(r runner.Result) string {
+	if r.TimedOut {
+		return "timeout"
+	}
+	return "exit " + strconv.Itoa(r.ExitCode)
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return strconv.Itoa(n) + " " + noun + "s"
 }
 
 func field(w io.Writer, label, value string) {

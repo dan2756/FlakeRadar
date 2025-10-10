@@ -15,6 +15,7 @@ go install github.com/dan2756/flaky@latest
 
 ```sh
 flaky -n 20 -- go test -count=1 ./pkg/...
+flaky -n 100 -j 8 --timeout 30s -- go test -count=1 -run TestCache ./cache
 flaky -n 50 'make test 2>&1 | grep -v noise'
 ```
 
@@ -37,8 +38,8 @@ stddev     0.181s
 cv          12.6%
 
 failed runs
-  run 7   exit 1
-  run 15  exit 1
+  run 7   exit 1   1.523s
+  run 15  timeout  30.001s
 ```
 
 The timing block shows the spread of run times: median and p95 use linear
@@ -49,10 +50,18 @@ fast and slow commands.
 | Flag | Description |
 | --- | --- |
 | `-n`, `--runs N` | number of runs (default 10) |
+| `-j`, `--parallel N` | run up to N at once (default 1) |
+| `-t`, `--timeout D` | kill a run that takes longer than D (`30s`, `2m`) and count it as a failure |
 | `-h`, `--help` | show help |
 | `--version` | print the version |
 
-Exit status is 0 if every run passed, 1 if any failed and 2 on usage errors.
+Each run starts in its own process group. On a timeout, or when flaky itself is
+interrupted, the whole group is killed, so `go test`'s test binaries and every
+stage of a pipeline go with it. Timed-out runs are left out of the timing
+numbers, since their duration is just the limit.
+
+Exit status is 0 if every run passed, 1 if any failed, 2 on usage errors and
+130 if interrupted.
 
 ## License
 

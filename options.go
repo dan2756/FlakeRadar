@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 )
 
 type options struct {
-	runs    int
-	version bool
+	runs     int
+	parallel int
+	timeout  time.Duration
+	version  bool
 
 	argv    []string // what to execute
 	display string   // how the command is shown in the report
@@ -24,6 +27,10 @@ func parseArgs(args []string) (*options, error) {
 
 	fs.IntVar(&o.runs, "n", 10, "")
 	fs.IntVar(&o.runs, "runs", 10, "")
+	fs.IntVar(&o.parallel, "j", 1, "")
+	fs.IntVar(&o.parallel, "parallel", 1, "")
+	fs.DurationVar(&o.timeout, "t", 0, "")
+	fs.DurationVar(&o.timeout, "timeout", 0, "")
 	fs.BoolVar(&o.version, "version", false, "")
 
 	if err := fs.Parse(args); err != nil {
@@ -37,6 +44,12 @@ func parseArgs(args []string) (*options, error) {
 	}
 	if o.runs < 1 {
 		return nil, fmt.Errorf("-n must be at least 1, got %d", o.runs)
+	}
+	if o.parallel < 1 {
+		return nil, fmt.Errorf("-j must be at least 1, got %d", o.parallel)
+	}
+	if o.timeout < 0 {
+		return nil, fmt.Errorf("--timeout must not be negative, got %v", o.timeout)
 	}
 	o.argv, o.display = commandArgv(fs.Args())
 	return o, nil

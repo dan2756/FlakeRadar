@@ -54,6 +54,9 @@ func TestParseArgsErrors(t *testing.T) {
 		{"-n", "0", "true"},
 		{"-n", "x", "true"},
 		{"--nope", "true"},
+		{"-j", "0", "true"},
+		{"--timeout", "-1s", "true"},
+		{"--timeout", "30", "true"},
 	} {
 		if _, err := parseArgs(args); err == nil {
 			t.Errorf("parseArgs(%q) succeeded, want error", args)

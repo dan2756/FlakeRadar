@@ -3,13 +3,18 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime/debug"
+	"syscall"
+
+	"github.com/dan2756/flaky/internal/runner"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -23,19 +28,25 @@ it takes. A single argument containing spaces or shell syntax is run with
 sh -c.
 
 Flags:
-  -n, --runs N   number of runs (default 10)
-  -h, --help     show this help
-      --version  print the version and exit
+  -n, --runs N       number of runs (default 10)
+  -j, --parallel N   run up to N at once (default 1)
+  -t, --timeout D    kill a run after D (e.g. 30s, 2m) and count it as a
+                     failure; the whole process group is killed
+  -h, --help         show this help
+      --version      print the version and exit
 
-Exit status is 0 if every run passed, 1 if any run failed and 2 on usage
-errors.
+Exit status is 0 if every run passed, 1 if any run failed, 2 on usage
+errors and 130 if interrupted.
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	opts, err := parseArgs(args)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
@@ -54,19 +65,24 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	results := make([]result, 0, opts.runs)
-	for i := 1; i <= opts.runs; i++ {
-		r, err := runOnce(opts.argv, i)
-		if err != nil {
-			fmt.Fprintf(stderr, "flaky: run %d: %v\n", i, err)
-			return 2
-		}
-		results = append(results, r)
+	results, err := runner.Run(ctx, runner.Config{
+		Argv:     opts.argv,
+		Runs:     opts.runs,
+		Parallel: opts.parallel,
+		Timeout:  opts.timeout,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "flaky: %v\n", err)
+		return 2
+	}
+	if ctx.Err() != nil {
+		fmt.Fprintln(stderr, "flaky: interrupted")
+		return 130
 	}
 
 	writeReport(stdout, opts.display, results)
 	for _, r := range results {
-		if !r.passed() {
+		if !r.Passed() {
 			return 1
 		}
 	}
