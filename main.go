@@ -12,7 +12,10 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
 	"syscall"
+
+	"golang.org/x/term"
 
 	"github.com/dan2756/flaky/internal/runner"
 )
@@ -32,21 +35,44 @@ Flags:
   -j, --parallel N   run up to N at once (default 1)
   -t, --timeout D    kill a run after D (e.g. 30s, 2m) and count it as a
                      failure; the whole process group is killed
+      --show-output N
+                     show the last N lines of the first failed run's
+                     output (default 50, 0 for all of it)
+  -q, --quiet        show neither command output nor progress
+  -v, --verbose      stream every run's output as it happens, each line
+                     prefixed with its run number
   -h, --help         show this help
       --version      print the version and exit
+
+Output is captured rather than streamed. On a terminal, a progress line shows
+"." for each pass and "F" for each failure.
 
 Exit status is 0 if every run passed, 1 if any run failed, 2 on usage
 errors and 130 if interrupted.
 `
 
+// console is where flaky writes, and what it knows about the terminal.
+type console struct {
+	stdout, stderr io.Writer
+	tty            bool // stderr is a terminal
+	width          int  // its width in columns, 0 if unknown
+}
+
 func main() {
+	con := console{stdout: os.Stdout, stderr: os.Stderr}
+	if fd := int(os.Stderr.Fd()); term.IsTerminal(fd) {
+		con.tty = true
+		con.width, _, _ = term.GetSize(fd)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	code := run(ctx, os.Args[1:], con)
 	stop()
 	os.Exit(code)
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, con console) int {
+	stdout, stderr := con.stdout, con.stderr
 	opts, err := parseArgs(args)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
@@ -65,12 +91,29 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	results, err := runner.Run(ctx, runner.Config{
+	cfg := runner.Config{
 		Argv:     opts.argv,
 		Runs:     opts.runs,
 		Parallel: opts.parallel,
 		Timeout:  opts.timeout,
-	})
+	}
+	var prog *progress
+	switch {
+	case opts.verbose:
+		out := &lockedWriter{w: stdout}
+		width := len(strconv.Itoa(opts.runs))
+		cfg.Tee = func(index int) io.WriteCloser {
+			return newPrefixWriter(out, fmt.Sprintf("[%*d] ", width, index))
+		}
+	case con.tty && !opts.quiet:
+		prog = newProgress(stderr, opts.runs, con.width)
+		cfg.OnResult = prog.add
+	}
+
+	results, err := runner.Run(ctx, cfg)
+	if prog != nil {
+		prog.finish()
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "flaky: %v\n", err)
 		return 2
@@ -80,11 +123,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 130
 	}
 
-	writeReport(stdout, opts.display, results)
+	failed := false
 	for _, r := range results {
 		if !r.Passed() {
-			return 1
+			if !failed && !opts.quiet && !opts.verbose {
+				writeOutput(stdout, r, opts.showOutput)
+			}
+			failed = true
 		}
+	}
+	if opts.verbose {
+		fmt.Fprintln(stdout)
+	}
+	writeReport(stdout, opts.display, results)
+	if failed {
+		return 1
 	}
 	return 0
 }

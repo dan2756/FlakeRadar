@@ -3,14 +3,20 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"slices"
 	"sync"
 	"time"
 )
+
+// waitDelay is how long to keep reading a run's output after it exits (or
+// is killed) when something it started still holds the output open.
+const waitDelay = 2 * time.Second
 
 // Config describes what to run and how.
 type Config struct {
@@ -18,6 +24,15 @@ type Config struct {
 	Runs     int           // number of runs
 	Parallel int           // maximum number of concurrent runs; below 1 means 1
 	Timeout  time.Duration // per-run time limit; 0 means none
+
+	// Tee, if set, is called as each run starts; the run's output is
+	// copied to the returned writer as well as captured, and the writer is
+	// closed when the run ends.
+	Tee func(index int) io.WriteCloser
+
+	// OnResult, if set, is called with each result as its run finishes.
+	// Calls are never concurrent.
+	OnResult func(Result)
 }
 
 // Result is the outcome of one run.
@@ -26,6 +41,7 @@ type Result struct {
 	ExitCode int // -1 if the run did not exit on its own
 	TimedOut bool
 	Duration time.Duration
+	Output   []byte // stdout and stderr, interleaved as written
 }
 
 // Passed reports whether the run exited 0 within its time limit.
@@ -61,6 +77,9 @@ func Run(ctx context.Context, cfg Config) ([]Result, error) {
 				switch {
 				case err == nil:
 					results = append(results, r)
+					if cfg.OnResult != nil {
+						cfg.OnResult(r)
+					}
 				case !errors.Is(err, errCanceled) && firstErr == nil:
 					firstErr = err
 					cancel()
@@ -96,12 +115,28 @@ func runOnce(ctx context.Context, cfg Config, index int) (Result, error) {
 		defer cancel()
 	}
 
+	var out bytes.Buffer
+	var w io.Writer = &out
+	if cfg.Tee != nil {
+		tee := cfg.Tee(index)
+		defer tee.Close()
+		w = io.MultiWriter(&out, tee)
+	}
+
 	cmd := exec.CommandContext(runCtx, cfg.Argv[0], cfg.Argv[1:]...)
+	cmd.Stdout = w
+	cmd.Stderr = w
+	cmd.WaitDelay = waitDelay
 	killWholeGroup(cmd)
 
 	start := time.Now()
 	err := cmd.Run()
-	r := Result{Index: index, Duration: time.Since(start)}
+	r := Result{Index: index, Duration: time.Since(start), Output: out.Bytes()}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// The command exited 0 but left something running that still
+		// holds its output open. The exit status is what counts.
+		err = nil
+	}
 	if err == nil {
 		return r, nil
 	}

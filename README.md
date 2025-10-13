@@ -23,6 +23,13 @@ Everything after `--` is the command and its arguments. A single quoted argument
 that contains spaces or shell syntax is run with `sh -c`.
 
 ```
+....F.........F.....  20/20
+--- output of run 7 (exit 1), last 4 of 212 lines ---
+--- FAIL: TestCacheEviction (0.02s)
+    cache_test.go:41: got 3 entries, want 2
+FAIL
+FAIL	example.com/app/pkg/cache	0.031s
+
 command    go test -count=1 ./pkg/...
 runs       20
 passes     18
@@ -52,8 +59,24 @@ fast and slow commands.
 | `-n`, `--runs N` | number of runs (default 10) |
 | `-j`, `--parallel N` | run up to N at once (default 1) |
 | `-t`, `--timeout D` | kill a run that takes longer than D (`30s`, `2m`) and count it as a failure |
+| `--show-output N` | show the last N lines of the first failed run's output (default 50, `0` for all) |
+| `-q`, `--quiet` | show neither command output nor progress |
+| `-v`, `--verbose` | stream every run's output live, each line prefixed with `[run]` |
 | `-h`, `--help` | show help |
 | `--version` | print the version |
+
+### Output
+
+Command output (stdout and stderr together) is captured, not streamed. When
+everything is done, flaky prints the output of the first failed run, then the
+report. `--verbose` streams all of it instead, line by line with the run number
+in front, which stays readable with `-j`.
+
+While runs are going, a progress line on stderr shows `.` for each pass and `F`
+for each failure, with a counter. It is only drawn when stderr is a terminal,
+so logs and pipes get plain output.
+
+### Timeouts
 
 Each run starts in its own process group. On a timeout, or when flaky itself is
 interrupted, the whole group is killed, so `go test`'s test binaries and every

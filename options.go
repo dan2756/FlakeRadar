@@ -10,10 +10,13 @@ import (
 )
 
 type options struct {
-	runs     int
-	parallel int
-	timeout  time.Duration
-	version  bool
+	runs       int
+	parallel   int
+	timeout    time.Duration
+	showOutput int
+	quiet      bool
+	verbose    bool
+	version    bool
 
 	argv    []string // what to execute
 	display string   // how the command is shown in the report
@@ -31,6 +34,11 @@ func parseArgs(args []string) (*options, error) {
 	fs.IntVar(&o.parallel, "parallel", 1, "")
 	fs.DurationVar(&o.timeout, "t", 0, "")
 	fs.DurationVar(&o.timeout, "timeout", 0, "")
+	fs.IntVar(&o.showOutput, "show-output", 50, "")
+	fs.BoolVar(&o.quiet, "q", false, "")
+	fs.BoolVar(&o.quiet, "quiet", false, "")
+	fs.BoolVar(&o.verbose, "v", false, "")
+	fs.BoolVar(&o.verbose, "verbose", false, "")
 	fs.BoolVar(&o.version, "version", false, "")
 
 	if err := fs.Parse(args); err != nil {
@@ -50,6 +58,12 @@ func parseArgs(args []string) (*options, error) {
 	}
 	if o.timeout < 0 {
 		return nil, fmt.Errorf("--timeout must not be negative, got %v", o.timeout)
+	}
+	if o.showOutput < 0 {
+		return nil, fmt.Errorf("--show-output must not be negative, got %d", o.showOutput)
+	}
+	if o.quiet && o.verbose {
+		return nil, errors.New("--quiet and --verbose don't go together")
 	}
 	o.argv, o.display = commandArgv(fs.Args())
 	return o, nil
