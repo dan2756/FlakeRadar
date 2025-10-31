@@ -38,6 +38,9 @@ Flags:
       --show-output N
                      show the last N lines of the first failed run's
                      output (default 50, 0 for all of it)
+      --threshold P  minimum pass rate, in percent, for exit status 0
+                     (default 100)
+      --json         print the result as JSON: every run plus the summary
   -q, --quiet        show neither command output nor progress
   -v, --verbose      stream every run's output as it happens, each line
                      prefixed with its run number
@@ -47,8 +50,8 @@ Flags:
 Output is captured rather than streamed. On a terminal, a progress line shows
 "." for each pass and "F" for each failure.
 
-Exit status is 0 if every run passed, 1 if any run failed, 2 on usage
-errors and 130 if interrupted.
+Exit status is 0 if the pass rate is at least --threshold, 1 if not, 2 on
+usage errors and 130 if interrupted.
 `
 
 // console is where flaky writes, and what it knows about the terminal.
@@ -100,7 +103,11 @@ func run(ctx context.Context, args []string, con console) int {
 	var prog *progress
 	switch {
 	case opts.verbose:
-		out := &lockedWriter{w: stdout}
+		// With --json, stdout is for the JSON alone.
+		var out io.Writer = &lockedWriter{w: stdout}
+		if opts.json {
+			out = &lockedWriter{w: stderr}
+		}
 		width := len(strconv.Itoa(opts.runs))
 		cfg.Tee = func(index int) io.WriteCloser {
 			return newPrefixWriter(out, fmt.Sprintf("[%*d] ", width, index))
@@ -123,20 +130,23 @@ func run(ctx context.Context, args []string, con console) int {
 		return 130
 	}
 
-	failed := false
-	for _, r := range results {
-		if !r.Passed() {
-			if !failed && !opts.quiet && !opts.verbose {
-				writeOutput(stdout, r, opts.showOutput)
-			}
-			failed = true
+	s := summarize(results, opts.threshold)
+	switch {
+	case opts.json:
+		if err := writeJSON(stdout, opts, results, s); err != nil {
+			fmt.Fprintf(stderr, "flaky: %v\n", err)
+			return 2
 		}
+	default:
+		if len(s.failed) > 0 && !opts.quiet && !opts.verbose {
+			writeOutput(stdout, s.failed[0], opts.showOutput)
+		}
+		if opts.verbose {
+			fmt.Fprintln(stdout)
+		}
+		writeReport(stdout, opts.display, s)
 	}
-	if opts.verbose {
-		fmt.Fprintln(stdout)
-	}
-	writeReport(stdout, opts.display, results)
-	if failed {
+	if !s.ok() {
 		return 1
 	}
 	return 0

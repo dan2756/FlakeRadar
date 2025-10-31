@@ -58,6 +58,9 @@ func TestParseArgsErrors(t *testing.T) {
 		{"--timeout", "-1s", "true"},
 		{"--timeout", "30", "true"},
 		{"--show-output", "-1", "true"},
+		{"--threshold", "101", "true"},
+		{"--threshold", "-5", "true"},
+		{"--threshold", "most", "true"},
 		{"-q", "-v", "true"},
 	} {
 		if _, err := parseArgs(args); err == nil {

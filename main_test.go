@@ -3,6 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -43,6 +47,89 @@ func TestFailureShowsOutput(t *testing.T) {
 	}
 }
 
+// alternating returns a shell command that fails on odd runs and passes on
+// even ones, counting runs in a file under a fresh temp dir.
+func alternating(t *testing.T) string {
+	f := filepath.Join(t.TempDir(), "count")
+	return fmt.Sprintf(`n=$(cat '%[1]s' 2>/dev/null || echo 0); n=$((n+1)); echo $n > '%[1]s'; [ $((n %% 2)) -eq 0 ]`, f)
+}
+
+func TestThreshold(t *testing.T) {
+	tests := []struct {
+		threshold string
+		wantCode  int
+		wantLast  string
+	}{
+		{"100", 1, "FAIL  2/4 runs passed (threshold 100%)\n"},
+		{"50", 0, "PASS  2/4 runs passed (threshold 50%)\n"},
+		{"50.1", 1, "FAIL  2/4 runs passed (threshold 50.1%)\n"},
+		{"0", 0, "PASS  2/4 runs passed (threshold 0%)\n"},
+	}
+	for _, tt := range tests {
+		code, out, _ := flaky(t, "-q", "-n", "4", "--threshold", tt.threshold, alternating(t))
+		if code != tt.wantCode {
+			t.Errorf("--threshold %s: exit code %d, want %d", tt.threshold, code, tt.wantCode)
+		}
+		if !strings.HasSuffix(out, tt.wantLast) {
+			t.Errorf("--threshold %s: report ends\n%s\nwant %q", tt.threshold, out, tt.wantLast)
+		}
+	}
+}
+
+func TestJSON(t *testing.T) {
+	code, out, _ := flaky(t, "--json", "-n", "4", "--threshold", "50", alternating(t))
+	if code != 0 {
+		t.Errorf("exit code %d, want 0", code)
+	}
+	var rep jsonReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if len(rep.Runs) != 4 {
+		t.Fatalf("got %d runs, want 4", len(rep.Runs))
+	}
+	for i, r := range rep.Runs {
+		wantPass := (i+1)%2 == 0
+		if r.Index != i+1 || r.Passed != wantPass || (r.ExitCode == 0) != wantPass || r.TimedOut {
+			t.Errorf("runs[%d] = %+v", i, r)
+		}
+		if r.DurationMS <= 0 {
+			t.Errorf("runs[%d].duration_ms = %v, want > 0", i, r.DurationMS)
+		}
+	}
+	sum := rep.Summary
+	if sum.Runs != 4 || sum.Passes != 2 || sum.Fails != 2 || sum.PassRate != 50 || !sum.OK || sum.TimedRuns != 4 {
+		t.Errorf("summary = %+v", sum)
+	}
+	if !slices.Equal(sum.FailedRuns, []int{1, 3}) {
+		t.Errorf("failed_runs = %v, want [1 3]", sum.FailedRuns)
+	}
+	d := sum.DurationMS
+	if !(d.Min > 0 && d.Min <= d.Median && d.Median <= d.P95 && d.P95 <= d.Max) {
+		t.Errorf("duration_ms out of order: %+v", d)
+	}
+	if rep.Argv[0] != "sh" || rep.Argv[1] != "-c" {
+		t.Errorf("argv = %q, want the sh -c form", rep.Argv)
+	}
+}
+
+func TestJSONTimeout(t *testing.T) {
+	code, out, _ := flaky(t, "--json", "-n", "1", "--timeout", "50ms", "--", "sleep", "5")
+	if code != 1 {
+		t.Errorf("exit code %d, want 1", code)
+	}
+	var rep jsonReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if len(rep.Runs) != 1 || !rep.Runs[0].TimedOut || rep.Runs[0].Passed {
+		t.Errorf("runs = %+v, want one timeout", rep.Runs)
+	}
+	if rep.Summary.TimedRuns != 0 || rep.Summary.DurationMS != (jsonDurations{}) {
+		t.Errorf("summary = %+v, want no timed runs", rep.Summary)
+	}
+}
+
 func TestQuiet(t *testing.T) {
 	_, out, _ := flaky(t, "-q", "-n", "1", "echo noisy; exit 1")
 	if strings.Contains(out, "--- output") || strings.Contains(out, "\nnoisy\n") {
@@ -63,6 +150,7 @@ func TestUsageErrors(t *testing.T) {
 		{"-n", "0", "true"},
 		{"-j", "0", "true"},
 		{"--bogus", "true"},
+		{"--threshold", "150", "true"},
 	} {
 		code, _, errOut := flaky(t, args...)
 		if code != 2 {

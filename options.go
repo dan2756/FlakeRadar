@@ -13,9 +13,11 @@ type options struct {
 	runs       int
 	parallel   int
 	timeout    time.Duration
+	threshold  float64
 	showOutput int
 	quiet      bool
 	verbose    bool
+	json       bool
 	version    bool
 
 	argv    []string // what to execute
@@ -34,11 +36,13 @@ func parseArgs(args []string) (*options, error) {
 	fs.IntVar(&o.parallel, "parallel", 1, "")
 	fs.DurationVar(&o.timeout, "t", 0, "")
 	fs.DurationVar(&o.timeout, "timeout", 0, "")
+	fs.Float64Var(&o.threshold, "threshold", 100, "")
 	fs.IntVar(&o.showOutput, "show-output", 50, "")
 	fs.BoolVar(&o.quiet, "q", false, "")
 	fs.BoolVar(&o.quiet, "quiet", false, "")
 	fs.BoolVar(&o.verbose, "v", false, "")
 	fs.BoolVar(&o.verbose, "verbose", false, "")
+	fs.BoolVar(&o.json, "json", false, "")
 	fs.BoolVar(&o.version, "version", false, "")
 
 	if err := fs.Parse(args); err != nil {
@@ -58,6 +62,9 @@ func parseArgs(args []string) (*options, error) {
 	}
 	if o.timeout < 0 {
 		return nil, fmt.Errorf("--timeout must not be negative, got %v", o.timeout)
+	}
+	if o.threshold < 0 || o.threshold > 100 {
+		return nil, fmt.Errorf("--threshold must be between 0 and 100, got %v", o.threshold)
 	}
 	if o.showOutput < 0 {
 		return nil, fmt.Errorf("--show-output must not be negative, got %d", o.showOutput)

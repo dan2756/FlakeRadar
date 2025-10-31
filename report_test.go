@@ -3,6 +3,9 @@ package main
 import (
 	"slices"
 	"testing"
+	"time"
+
+	"github.com/dan2756/flaky/internal/runner"
 )
 
 func TestFormatPercent(t *testing.T) {
@@ -48,5 +51,65 @@ func TestAlignRight(t *testing.T) {
 	want := []string{"  1.2ms", "812.3µs", "  12.6%"}
 	if !slices.Equal(got, want) {
 		t.Errorf("alignRight = %q, want %q", got, want)
+	}
+}
+
+func TestMeetsThreshold(t *testing.T) {
+	tests := []struct {
+		passes, runs int
+		threshold    float64
+		want         bool
+	}{
+		{10, 10, 100, true},
+		{9, 10, 100, false},
+		{19, 20, 95, true}, // exactly on the line
+		{18, 20, 95, false},
+		{1, 3, 33.3, true},
+		{1, 3, 33.34, false},
+		{2, 3, 66.66, true},
+		{0, 10, 0, true},
+		{0, 0, 0, false}, // nothing ran, nothing passed
+		{9999, 10000, 99.99, true},
+		{9998, 10000, 99.99, false},
+	}
+	for _, tt := range tests {
+		if got := meetsThreshold(tt.passes, tt.runs, tt.threshold); got != tt.want {
+			t.Errorf("meetsThreshold(%d, %d, %v) = %v, want %v", tt.passes, tt.runs, tt.threshold, got, tt.want)
+		}
+	}
+}
+
+func TestVerdict(t *testing.T) {
+	tests := []struct {
+		passes, runs int
+		threshold    float64
+		want         string
+	}{
+		{20, 20, 100, "PASS  20/20 runs passed"},
+		{18, 20, 100, "FAIL  18/20 runs passed (threshold 100%)"},
+		{18, 20, 80, "PASS  18/20 runs passed (threshold 80%)"},
+		{15, 20, 80, "FAIL  15/20 runs passed (threshold 80%)"},
+		{199, 200, 99.5, "PASS  199/200 runs passed (threshold 99.5%)"},
+	}
+	for _, tt := range tests {
+		s := summary{runs: tt.runs, passes: tt.passes, threshold: tt.threshold}
+		if got := s.verdict(); got != tt.want {
+			t.Errorf("verdict for %d/%d at %v%% = %q, want %q", tt.passes, tt.runs, tt.threshold, got, tt.want)
+		}
+	}
+}
+
+func TestSummarizeLeavesTimeoutsOutOfTiming(t *testing.T) {
+	results := []runner.Result{
+		{Index: 1, Duration: 100 * time.Millisecond},
+		{Index: 2, Duration: 300 * time.Millisecond, ExitCode: 1},
+		{Index: 3, Duration: 30 * time.Second, ExitCode: -1, TimedOut: true},
+	}
+	s := summarize(results, 100)
+	if s.runs != 3 || s.passes != 1 || len(s.failed) != 2 || s.timedOut != 1 {
+		t.Errorf("summary = %+v", s)
+	}
+	if s.timing.N != 2 || s.timing.Max != float64(300*time.Millisecond) {
+		t.Errorf("timing = %+v, want the two runs that finished", s.timing)
 	}
 }

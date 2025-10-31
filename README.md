@@ -3,7 +3,8 @@
 Run a command N times and see how often it passes and how long it takes.
 
 `flaky` is for the test that fails "sometimes": run it twenty times, get a pass
-rate and the run numbers that failed, and stop guessing.
+rate, the run numbers that failed and the output of the first one, and stop
+guessing.
 
 ## Install
 
@@ -14,15 +15,32 @@ go install github.com/dan2756/flaky@latest
 ## Usage
 
 ```sh
-flaky -n 20 -- go test -count=1 ./pkg/...
-flaky -n 100 -j 8 --timeout 30s -- go test -count=1 -run TestCache ./cache
-flaky -n 50 'make test 2>&1 | grep -v noise'
+flaky [flags] [--] command [args...]
+flaky [flags] 'shell command'
 ```
 
 Everything after `--` is the command and its arguments. A single quoted argument
 that contains spaces or shell syntax is run with `sh -c`.
 
+```sh
+# Is it flaky?
+flaky -n 20 -- go test -count=1 ./pkg/...
+
+# Hammer one test, eight at a time, killing any run that hangs.
+flaky -n 200 -j 8 --timeout 30s -- go test -count=1 -run 'TestCache$' ./cache
+
+# Anything a shell can run.
+flaky -n 50 'make integration 2>&1 | grep -v DEBUG'
+
+# Gate CI on "passes at least 95% of the time".
+flaky -n 40 --threshold 95 --quiet -- ./scripts/e2e.sh
 ```
+
+Pass `-count=1` to `go test`, or it will happily serve the first result from
+its cache for every run after that.
+
+```
+$ flaky -n 20 --timeout 30s -- go test -count=1 ./pkg/...
 ....F.........F.....  20/20
 --- output of run 7 (exit 1), last 4 of 212 lines ---
 --- FAIL: TestCacheEviction (0.02s)
@@ -43,29 +61,36 @@ p95        1.877s
 max        1.921s
 stddev     0.181s
 cv          12.6%
+           (timing excludes 1 timed-out run)
 
 failed runs
   run 7   exit 1   1.523s
   run 15  timeout  30.001s
+
+FAIL  18/20 runs passed (threshold 100%)
 ```
 
-The timing block shows the spread of run times: median and p95 use linear
-interpolation between samples, stddev is the sample standard deviation and cv
-(coefficient of variation, stddev / mean) makes the spread comparable between
-fast and slow commands.
+The timing block shows the spread of run times: median and p95 interpolate
+between samples, stddev is the sample standard deviation, and cv (coefficient
+of variation, stddev / mean) makes the spread comparable between fast and slow
+commands.
+
+## Flags
 
 | Flag | Description |
 | --- | --- |
 | `-n`, `--runs N` | number of runs (default 10) |
 | `-j`, `--parallel N` | run up to N at once (default 1) |
 | `-t`, `--timeout D` | kill a run that takes longer than D (`30s`, `2m`) and count it as a failure |
+| `--threshold P` | minimum pass rate in percent for exit status 0 (default 100) |
+| `--json` | print every run and the summary as JSON |
 | `--show-output N` | show the last N lines of the first failed run's output (default 50, `0` for all) |
 | `-q`, `--quiet` | show neither command output nor progress |
 | `-v`, `--verbose` | stream every run's output live, each line prefixed with `[run]` |
 | `-h`, `--help` | show help |
 | `--version` | print the version |
 
-### Output
+## Output
 
 Command output (stdout and stderr together) is captured, not streamed. When
 everything is done, flaky prints the output of the first failed run, then the
@@ -76,15 +101,53 @@ While runs are going, a progress line on stderr shows `.` for each pass and `F`
 for each failure, with a counter. It is only drawn when stderr is a terminal,
 so logs and pipes get plain output.
 
-### Timeouts
+## Timeouts
 
 Each run starts in its own process group. On a timeout, or when flaky itself is
 interrupted, the whole group is killed, so `go test`'s test binaries and every
-stage of a pipeline go with it. Timed-out runs are left out of the timing
-numbers, since their duration is just the limit.
+stage of a pipeline go with it. Timed-out runs count as failures but are left
+out of the timing numbers, since their duration is just the limit.
 
-Exit status is 0 if every run passed, 1 if any failed, 2 on usage errors and
-130 if interrupted.
+## JSON
+
+`--json` replaces the text report with a single JSON document on stdout. The
+command's output is not included; with `--verbose` it streams to stderr.
+Trimmed to two of the twenty runs:
+
+```json
+{
+  "command": "go test -count=1 ./pkg/...",
+  "argv": ["go", "test", "-count=1", "./pkg/..."],
+  "runs": [
+    { "index": 1, "exit_code": 0, "duration_ms": 1398.214, "timed_out": false, "passed": true },
+    { "index": 7, "exit_code": 1, "duration_ms": 1523.007, "timed_out": false, "passed": false }
+  ],
+  "summary": {
+    "runs": 20,
+    "passes": 18,
+    "fails": 2,
+    "pass_rate": 90,
+    "threshold": 100,
+    "ok": false,
+    "timed_runs": 19,
+    "duration_ms": { "min": 1214.33, "mean": 1432.1, "median": 1398.214, "p95": 1877.5, "max": 1921.02, "stddev": 181.2 },
+    "cv": 0.1265,
+    "failed_runs": [7, 15]
+  }
+}
+```
+
+A timed-out run has `"timed_out": true` and `"exit_code": -1`. `timed_runs` is
+how many runs the duration stats cover.
+
+## Exit status
+
+| Code | Meaning |
+| --- | --- |
+| 0 | the pass rate is at least `--threshold` |
+| 1 | it is not |
+| 2 | usage error, or the command could not be started |
+| 130 | interrupted |
 
 ## License
 

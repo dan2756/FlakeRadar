@@ -17,41 +17,90 @@ const (
 	maxListed  = 20 // failed runs listed before the rest are summarized
 )
 
-func writeReport(w io.Writer, command string, results []runner.Result) {
-	var (
-		passes   int
-		failed   []runner.Result
-		timedOut int
-		samples  = make([]float64, 0, len(results))
-	)
+// summary is what the report says about a set of results.
+type summary struct {
+	runs      int
+	passes    int
+	failed    []runner.Result
+	timedOut  int           // timed-out runs, left out of timing
+	timing    stats.Summary // run durations in nanoseconds
+	threshold float64       // required pass rate in percent
+}
+
+func summarize(results []runner.Result, threshold float64) summary {
+	s := summary{runs: len(results), threshold: threshold}
+	samples := make([]float64, 0, len(results))
 	for _, r := range results {
 		if r.Passed() {
-			passes++
+			s.passes++
 		} else {
-			failed = append(failed, r)
+			s.failed = append(s.failed, r)
 		}
 		if r.TimedOut {
 			// Its duration is just the time limit; leave it out of the
 			// timing so it doesn't drag the numbers toward the limit.
-			timedOut++
+			s.timedOut++
 			continue
 		}
 		samples = append(samples, float64(r.Duration))
 	}
+	s.timing = stats.Summarize(samples)
+	return s
+}
 
+// passRate is the percentage of runs that passed, 0 if there were none.
+func (s summary) passRate() float64 {
+	if s.runs == 0 {
+		return 0
+	}
+	return 100 * float64(s.passes) / float64(s.runs)
+}
+
+// ok reports whether the pass rate meets the threshold.
+func (s summary) ok() bool {
+	return meetsThreshold(s.passes, s.runs, s.threshold)
+}
+
+// meetsThreshold reports whether passes out of runs is at least threshold
+// percent. It compares passes*100 with threshold*runs rather than the
+// rounded pass rate, so 19 of 20 meets a threshold of 95.
+func meetsThreshold(passes, runs int, threshold float64) bool {
+	if runs == 0 {
+		return false
+	}
+	return float64(passes)*100 >= threshold*float64(runs)-1e-9
+}
+
+// verdict is the report's last line.
+func (s summary) verdict() string {
+	word := "PASS"
+	if !s.ok() {
+		word = "FAIL"
+	}
+	v := fmt.Sprintf("%s  %d/%d runs passed", word, s.passes, s.runs)
+	if s.threshold < 100 || !s.ok() {
+		v += " (threshold " + strconv.FormatFloat(s.threshold, 'f', -1, 64) + "%)"
+	}
+	return v
+}
+
+func writeReport(w io.Writer, command string, s summary) {
 	field(w, "command", command)
-	field(w, "runs", strconv.Itoa(len(results)))
-	field(w, "passes", strconv.Itoa(passes))
-	field(w, "fails", strconv.Itoa(len(failed)))
-	field(w, "pass rate", formatPercent(passes, len(results)))
+	field(w, "runs", strconv.Itoa(s.runs))
+	field(w, "passes", strconv.Itoa(s.passes))
+	field(w, "fails", strconv.Itoa(len(s.failed)))
+	field(w, "pass rate", formatPercent(s.passes, s.runs))
 
 	fmt.Fprintln(w)
-	writeTiming(w, stats.Summarize(samples), timedOut)
+	writeTiming(w, s.timing, s.timedOut)
 
-	if len(failed) > 0 {
+	if len(s.failed) > 0 {
 		fmt.Fprintln(w)
-		writeFailures(w, failed)
+		writeFailures(w, s.failed)
 	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, s.verdict())
 }
 
 // writeTiming writes the duration statistics (in nanoseconds) as a column
