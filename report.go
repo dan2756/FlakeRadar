@@ -17,14 +17,22 @@ const (
 	maxListed  = 20 // failed runs listed before the rest are summarized
 )
 
+// Why a run of runs ended early.
+const (
+	stoppedFailure     = "failure"
+	stoppedInterrupted = "interrupted"
+)
+
 // summary is what the report says about a set of results.
 type summary struct {
 	runs      int
 	passes    int
 	failed    []runner.Result
-	timedOut  int           // timed-out runs, left out of timing
+	warmup    int           // warmup runs, left out of timing
+	timedOut  int           // other timed-out runs, left out of timing
 	timing    stats.Summary // run durations in nanoseconds
 	threshold float64       // required pass rate in percent
+	stopped   string        // why runs ended early, if they did
 }
 
 func summarize(results []runner.Result, threshold float64) summary {
@@ -36,7 +44,11 @@ func summarize(results []runner.Result, threshold float64) summary {
 		} else {
 			s.failed = append(s.failed, r)
 		}
-		if r.TimedOut {
+		switch {
+		case r.Warmup:
+			s.warmup++
+			continue
+		case r.TimedOut:
 			// Its duration is just the time limit; leave it out of the
 			// timing so it doesn't drag the numbers toward the limit.
 			s.timedOut++
@@ -86,13 +98,20 @@ func (s summary) verdict() string {
 
 func writeReport(w io.Writer, command string, s summary) {
 	field(w, "command", command)
-	field(w, "runs", strconv.Itoa(s.runs))
+	runs := strconv.Itoa(s.runs)
+	switch s.stopped {
+	case stoppedFailure:
+		runs += " (stopped at the first failure)"
+	case stoppedInterrupted:
+		runs += " (interrupted)"
+	}
+	field(w, "runs", runs)
 	field(w, "passes", strconv.Itoa(s.passes))
 	field(w, "fails", strconv.Itoa(len(s.failed)))
 	field(w, "pass rate", formatPercent(s.passes, s.runs))
 
 	fmt.Fprintln(w)
-	writeTiming(w, s.timing, s.timedOut)
+	writeTiming(w, s)
 
 	if len(s.failed) > 0 {
 		fmt.Fprintln(w)
@@ -103,22 +122,35 @@ func writeReport(w io.Writer, command string, s summary) {
 	fmt.Fprintln(w, s.verdict())
 }
 
-// writeTiming writes the duration statistics (in nanoseconds) as a column
-// of right-aligned values in a shared unit.
-func writeTiming(w io.Writer, s stats.Summary, timedOut int) {
-	if s.N == 0 {
-		field(w, "timing", "n/a, every run timed out")
+// writeTiming writes the duration statistics as a column of right-aligned
+// values in a shared unit.
+func writeTiming(w io.Writer, s summary) {
+	var excluded []string
+	if s.warmup > 0 {
+		excluded = append(excluded, plural(s.warmup, "warmup run"))
+	}
+	if s.timedOut > 0 {
+		excluded = append(excluded, plural(s.timedOut, "timed-out run"))
+	}
+	note := ""
+	if len(excluded) > 0 {
+		note = "excludes " + strings.Join(excluded, " and ")
+	}
+
+	t := s.timing
+	if t.N == 0 {
+		field(w, "timing", "n/a ("+note+")")
 		return
 	}
 	labels := []string{"min", "mean", "median", "p95", "max", "stddev", "cv"}
-	values := formatDurations(s.Mean, s.Min, s.Mean, s.Median, s.P95, s.Max, s.Stddev)
-	values = append(values, strconv.FormatFloat(100*s.CV, 'f', 1, 64)+"%")
+	values := formatDurations(t.Mean, t.Min, t.Mean, t.Median, t.P95, t.Max, t.Stddev)
+	values = append(values, strconv.FormatFloat(100*t.CV, 'f', 1, 64)+"%")
 	values = alignRight(values)
 	for i, label := range labels {
 		field(w, label, values[i])
 	}
-	if timedOut > 0 {
-		field(w, "", fmt.Sprintf("(timing excludes %s)", plural(timedOut, "timed-out run")))
+	if note != "" {
+		field(w, "", "(timing "+note+")")
 	}
 }
 

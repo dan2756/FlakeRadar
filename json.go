@@ -22,6 +22,7 @@ type jsonRun struct {
 	DurationMS float64 `json:"duration_ms"`
 	TimedOut   bool    `json:"timed_out"`
 	Passed     bool    `json:"passed"`
+	Warmup     bool    `json:"warmup,omitempty"`
 }
 
 type jsonSummary struct {
@@ -31,6 +32,8 @@ type jsonSummary struct {
 	PassRate   float64       `json:"pass_rate"`
 	Threshold  float64       `json:"threshold"`
 	OK         bool          `json:"ok"`
+	Stopped    string        `json:"stopped,omitempty"`
+	Warmup     int           `json:"warmup"`
 	TimedRuns  int           `json:"timed_runs"`
 	DurationMS jsonDurations `json:"duration_ms"`
 	CV         float64       `json:"cv"`
@@ -58,6 +61,8 @@ func writeJSON(w io.Writer, opts *options, results []runner.Result, s summary) e
 			PassRate:  round(s.passRate(), 4),
 			Threshold: s.threshold,
 			OK:        s.ok(),
+			Stopped:   s.stopped,
+			Warmup:    s.warmup,
 			TimedRuns: s.timing.N,
 			DurationMS: jsonDurations{
 				Min:    ms(s.timing.Min),
@@ -78,6 +83,7 @@ func writeJSON(w io.Writer, opts *options, results []runner.Result, s summary) e
 			DurationMS: ms(float64(r.Duration)),
 			TimedOut:   r.TimedOut,
 			Passed:     r.Passed(),
+			Warmup:     r.Warmup,
 		}
 	}
 	for i, r := range s.failed {

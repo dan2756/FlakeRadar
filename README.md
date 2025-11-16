@@ -29,6 +29,9 @@ flaky -n 20 -- go test -count=1 ./pkg/...
 # Hammer one test, eight at a time, killing any run that hangs.
 flaky -n 200 -j 8 --timeout 30s -- go test -count=1 -run 'TestCache$' ./cache
 
+# Keep going until it breaks, then show why.
+flaky --until-fail -j 4 -- go test -count=1 -race -run TestScheduler ./sched
+
 # Anything a shell can run.
 flaky -n 50 'make integration 2>&1 | grep -v DEBUG'
 
@@ -82,6 +85,9 @@ commands.
 | `-n`, `--runs N` | number of runs (default 10) |
 | `-j`, `--parallel N` | run up to N at once (default 1) |
 | `-t`, `--timeout D` | kill a run that takes longer than D (`30s`, `2m`) and count it as a failure |
+| `--fail-fast` | stop at the first failure |
+| `--until-fail` | keep going until a run fails: up to `-n` runs if given, no limit otherwise |
+| `--warmup K` | run K runs first, one at a time, and leave them out of the timing stats |
 | `--threshold P` | minimum pass rate in percent for exit status 0 (default 100) |
 | `--json` | print every run and the summary as JSON |
 | `--show-output N` | show the last N lines of the first failed run's output (default 50, `0` for all) |
@@ -100,6 +106,37 @@ in front, which stays readable with `-j`.
 While runs are going, a progress line on stderr shows `.` for each pass and `F`
 for each failure, with a counter. It is only drawn when stderr is a terminal,
 so logs and pipes get plain output.
+
+## Hunting a flake
+
+`--until-fail` is for the test that fails once in a few hundred runs. Without
+`-n` it runs until something fails (or you press Ctrl-C), then shows that
+run's output:
+
+```
+$ flaky --until-fail -j 4 -- go test -count=1 -race -run TestScheduler ./sched
+............................................................F  61
+--- output of run 63 (exit 1) ---
+--- FAIL: TestScheduler (0.31s)
+    sched_test.go:88: job 12 ran twice
+FAIL
+...
+
+runs       61 (stopped at the first failure)
+...
+```
+
+`--fail-fast` stops the same way but keeps the default of 10 runs, for when
+you only want to know whether it passes. Either way, runs still in flight when
+the failure comes in are killed and left out of the report, which is why the
+run numbers can skip.
+
+Ctrl-C stops everything, kills the runs in flight and reports on the ones that
+finished (exit status 130). A second Ctrl-C exits at once.
+
+`--warmup K` treats the first K runs as warmup: they run one at a time before
+the rest, still count as passes or failures, but are left out of the timing,
+so a cold build cache or first-run compile doesn't skew it.
 
 ## Timeouts
 

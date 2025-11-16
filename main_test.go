@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // flaky runs the CLI in-process and returns its exit code and output.
@@ -127,6 +128,85 @@ func TestJSONTimeout(t *testing.T) {
 	}
 	if rep.Summary.TimedRuns != 0 || rep.Summary.DurationMS != (jsonDurations{}) {
 		t.Errorf("summary = %+v, want no timed runs", rep.Summary)
+	}
+}
+
+// failOn returns a shell command that fails on run n, counting runs in a
+// file under a fresh temp dir.
+func failOn(t *testing.T, n int) string {
+	f := filepath.Join(t.TempDir(), "count")
+	return fmt.Sprintf(`c=$(cat '%[1]s' 2>/dev/null || echo 0); c=$((c+1)); echo $c > '%[1]s'; [ $c -ne %[2]d ]`, f, n)
+}
+
+func TestUntilFail(t *testing.T) {
+	code, out, _ := flaky(t, "--until-fail", failOn(t, 30))
+	if code != 1 {
+		t.Errorf("exit code %d, want 1", code)
+	}
+	for _, want := range []string{
+		"runs       30 (stopped at the first failure)\n",
+		"passes     29\n",
+		"  run 30  exit 1",
+		"FAIL  29/30 runs passed (threshold 100%)\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestUntilFailWithinLimit(t *testing.T) {
+	code, out, _ := flaky(t, "--until-fail", "-n", "5", failOn(t, 30))
+	if code != 0 {
+		t.Errorf("exit code %d, want 0 when nothing failed within -n", code)
+	}
+	if !strings.Contains(out, "runs       5\n") {
+		t.Errorf("want 5 runs:\n%s", out)
+	}
+}
+
+func TestFailFast(t *testing.T) {
+	code, out, _ := flaky(t, "--fail-fast", "-n", "10", failOn(t, 2))
+	if code != 1 {
+		t.Errorf("exit code %d, want 1", code)
+	}
+	if !strings.Contains(out, "runs       2 (stopped at the first failure)\n") {
+		t.Errorf("want a stop after run 2:\n%s", out)
+	}
+}
+
+func TestWarmup(t *testing.T) {
+	code, out, _ := flaky(t, "--json", "-n", "5", "--warmup", "2", "--", "true")
+	if code != 0 {
+		t.Errorf("exit code %d, want 0", code)
+	}
+	var rep jsonReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if rep.Summary.Runs != 5 || rep.Summary.Warmup != 2 || rep.Summary.TimedRuns != 3 {
+		t.Errorf("summary = %+v, want 5 runs, 2 of them warmup, 3 timed", rep.Summary)
+	}
+	if !rep.Runs[0].Warmup || !rep.Runs[1].Warmup || rep.Runs[2].Warmup {
+		t.Errorf("runs = %+v, want the first two marked as warmup", rep.Runs)
+	}
+
+	_, out, _ = flaky(t, "-n", "5", "--warmup", "2", "--", "true")
+	if !strings.Contains(out, "(timing excludes 2 warmup runs)") {
+		t.Errorf("text report doesn't mention the warmup runs:\n%s", out)
+	}
+}
+
+func TestInterrupted(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	var out, errOut bytes.Buffer
+	code := run(ctx, []string{"-n", "1000", "--", "sleep", "0.05"}, console{stdout: &out, stderr: &errOut})
+	if code != 130 {
+		t.Errorf("exit code %d, want 130", code)
+	}
+	if !strings.Contains(out.String(), " (interrupted)\n") || !strings.Contains(out.String(), "PASS  ") {
+		t.Errorf("want a report of the runs that finished:\n%s", out.String())
 	}
 }
 

@@ -12,9 +12,10 @@ import (
 // only used when stderr is a terminal.
 type progress struct {
 	w     io.Writer
-	total int
+	total int // 0 if there is no fixed number of runs
 	width int // terminal columns
-	marks []byte
+	done  int
+	marks []byte // the most recent marks, no more than fit on a line
 }
 
 func newProgress(w io.Writer, total, width int) *progress {
@@ -31,12 +32,19 @@ func (p *progress) add(r runner.Result) {
 	if !r.Passed() {
 		mark = 'F'
 	}
+	p.done++
 	p.marks = append(p.marks, mark)
+	if len(p.marks) > p.width {
+		p.marks = append(p.marks[:0], p.marks[len(p.marks)-p.width:]...)
+	}
 	p.draw()
 }
 
 func (p *progress) draw() {
-	counter := fmt.Sprintf("  %d/%d", len(p.marks), p.total)
+	counter := fmt.Sprintf("  %d", p.done)
+	if p.total > 0 {
+		counter += fmt.Sprintf("/%d", p.total)
+	}
 	marks := p.marks
 	// Keep clear of the last column so the terminal doesn't wrap, and
 	// show the most recent marks once they no longer fit.

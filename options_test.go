@@ -62,9 +62,37 @@ func TestParseArgsErrors(t *testing.T) {
 		{"--threshold", "-5", "true"},
 		{"--threshold", "most", "true"},
 		{"-q", "-v", "true"},
+		{"--warmup", "-1", "true"},
+		{"-n", "5", "--warmup", "5", "true"},
+		{"-n", "-1", "--until-fail", "true"},
 	} {
 		if _, err := parseArgs(args); err == nil {
 			t.Errorf("parseArgs(%q) succeeded, want error", args)
+		}
+	}
+}
+
+func TestParseArgsRuns(t *testing.T) {
+	tests := []struct {
+		args []string
+		want int
+	}{
+		{[]string{"true"}, 10},
+		{[]string{"-n", "3", "true"}, 3},
+		{[]string{"--runs", "7", "true"}, 7},
+		{[]string{"--until-fail", "true"}, 0}, // no limit
+		{[]string{"--until-fail", "-n", "500", "true"}, 500},
+		{[]string{"--until-fail", "-n", "0", "true"}, 0},
+		{[]string{"--until-fail", "--warmup", "3", "true"}, 0},
+	}
+	for _, tt := range tests {
+		o, err := parseArgs(tt.args)
+		if err != nil {
+			t.Errorf("parseArgs(%q): %v", tt.args, err)
+			continue
+		}
+		if o.runs != tt.want {
+			t.Errorf("parseArgs(%q).runs = %d, want %d", tt.args, o.runs, tt.want)
 		}
 	}
 }

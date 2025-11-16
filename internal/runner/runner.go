@@ -21,9 +21,17 @@ const waitDelay = 2 * time.Second
 // Config describes what to run and how.
 type Config struct {
 	Argv     []string      // command and arguments
-	Runs     int           // number of runs
+	Runs     int           // number of runs; 0 means no limit
 	Parallel int           // maximum number of concurrent runs; below 1 means 1
 	Timeout  time.Duration // per-run time limit; 0 means none
+
+	// Warmup runs come first, one at a time, before any others start.
+	// Their results are marked as such so they can be left out of timing.
+	Warmup int
+
+	// StopOnFailure stops at the first failed run: nothing new starts,
+	// and runs still in flight are killed and left out of the results.
+	StopOnFailure bool
 
 	// Tee, if set, is called as each run starts; the run's output is
 	// copied to the returned writer as well as captured, and the writer is
@@ -40,6 +48,7 @@ type Result struct {
 	Index    int // 1-based run number
 	ExitCode int // -1 if the run did not exit on its own
 	TimedOut bool
+	Warmup   bool
 	Duration time.Duration
 	Output   []byte // stdout and stderr, interleaved as written
 }
@@ -64,33 +73,49 @@ func Run(ctx context.Context, cfg Config) ([]Result, error) {
 		mu       sync.Mutex
 		results  = make([]Result, 0, cfg.Runs)
 		firstErr error
-		wg       sync.WaitGroup
-		jobs     = make(chan int)
 	)
-	for range min(max(cfg.Parallel, 1), cfg.Runs) {
+	record := func(r Result, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case err == nil:
+			results = append(results, r)
+			if cfg.OnResult != nil {
+				cfg.OnResult(r)
+			}
+			if cfg.StopOnFailure && !r.Passed() {
+				cancel()
+			}
+		case !errors.Is(err, errCanceled) && firstErr == nil:
+			firstErr = err
+			cancel()
+		}
+	}
+	more := func(i int) bool { return cfg.Runs == 0 || i <= cfg.Runs }
+
+	next := 1
+	for ; next <= cfg.Warmup && more(next) && ctx.Err() == nil; next++ {
+		record(runOnce(ctx, cfg, next))
+	}
+
+	workers := max(cfg.Parallel, 1)
+	if cfg.Runs > 0 {
+		workers = min(workers, cfg.Runs-next+1)
+	}
+	var wg sync.WaitGroup
+	jobs := make(chan int)
+	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				r, err := runOnce(ctx, cfg, i)
-				mu.Lock()
-				switch {
-				case err == nil:
-					results = append(results, r)
-					if cfg.OnResult != nil {
-						cfg.OnResult(r)
-					}
-				case !errors.Is(err, errCanceled) && firstErr == nil:
-					firstErr = err
-					cancel()
-				}
-				mu.Unlock()
+				record(runOnce(ctx, cfg, i))
 			}
 		}()
 	}
 
 feed:
-	for i := 1; i <= cfg.Runs; i++ {
+	for i := next; more(i) && ctx.Err() == nil; i++ {
 		select {
 		case jobs <- i:
 		case <-ctx.Done():
@@ -131,7 +156,12 @@ func runOnce(ctx context.Context, cfg Config, index int) (Result, error) {
 
 	start := time.Now()
 	err := cmd.Run()
-	r := Result{Index: index, Duration: time.Since(start), Output: out.Bytes()}
+	r := Result{
+		Index:    index,
+		Warmup:   index <= cfg.Warmup,
+		Duration: time.Since(start),
+		Output:   out.Bytes(),
+	}
 	if errors.Is(err, exec.ErrWaitDelay) {
 		// The command exited 0 but left something running that still
 		// holds its output open. The exit status is what counts.

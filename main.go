@@ -38,6 +38,11 @@ Flags:
       --show-output N
                      show the last N lines of the first failed run's
                      output (default 50, 0 for all of it)
+      --fail-fast    stop at the first failure
+      --until-fail   keep going until a run fails: up to -n runs if -n is
+                     given, with no limit otherwise
+      --warmup K     run K runs first, one at a time, and leave them out of
+                     the timing stats (they still count as passes or fails)
       --threshold P  minimum pass rate, in percent, for exit status 0
                      (default 100)
       --json         print the result as JSON: every run plus the summary
@@ -49,6 +54,9 @@ Flags:
 
 Output is captured rather than streamed. On a terminal, a progress line shows
 "." for each pass and "F" for each failure.
+
+With --fail-fast or --until-fail, runs still in flight when a failure comes
+in are killed and left out. Ctrl-C does the same and reports what finished.
 
 Exit status is 0 if the pass rate is at least --threshold, 1 if not, 2 on
 usage errors and 130 if interrupted.
@@ -69,6 +77,12 @@ func main() {
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		// After the first Ctrl-C, flaky winds down and reports; a second
+		// one gets the default behaviour and exits at once.
+		<-ctx.Done()
+		stop()
+	}()
 	code := run(ctx, os.Args[1:], con)
 	stop()
 	os.Exit(code)
@@ -99,6 +113,9 @@ func run(ctx context.Context, args []string, con console) int {
 		Runs:     opts.runs,
 		Parallel: opts.parallel,
 		Timeout:  opts.timeout,
+		Warmup:   opts.warmup,
+
+		StopOnFailure: opts.failFast || opts.untilFail,
 	}
 	var prog *progress
 	switch {
@@ -125,12 +142,19 @@ func run(ctx context.Context, args []string, con console) int {
 		fmt.Fprintf(stderr, "flaky: %v\n", err)
 		return 2
 	}
-	if ctx.Err() != nil {
-		fmt.Fprintln(stderr, "flaky: interrupted")
+	interrupted := ctx.Err() != nil
+	if interrupted && len(results) == 0 {
+		fmt.Fprintln(stderr, "flaky: interrupted before any run finished")
 		return 130
 	}
 
 	s := summarize(results, opts.threshold)
+	switch {
+	case interrupted:
+		s.stopped = stoppedInterrupted
+	case cfg.StopOnFailure && len(s.failed) > 0 && (opts.runs == 0 || s.runs < opts.runs):
+		s.stopped = stoppedFailure
+	}
 	switch {
 	case opts.json:
 		if err := writeJSON(stdout, opts, results, s); err != nil {
@@ -146,7 +170,10 @@ func run(ctx context.Context, args []string, con console) int {
 		}
 		writeReport(stdout, opts.display, s)
 	}
-	if !s.ok() {
+	switch {
+	case interrupted:
+		return 130
+	case !s.ok():
 		return 1
 	}
 	return 0

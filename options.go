@@ -13,6 +13,9 @@ type options struct {
 	runs       int
 	parallel   int
 	timeout    time.Duration
+	warmup     int
+	failFast   bool
+	untilFail  bool
 	threshold  float64
 	showOutput int
 	quiet      bool
@@ -36,6 +39,9 @@ func parseArgs(args []string) (*options, error) {
 	fs.IntVar(&o.parallel, "parallel", 1, "")
 	fs.DurationVar(&o.timeout, "t", 0, "")
 	fs.DurationVar(&o.timeout, "timeout", 0, "")
+	fs.IntVar(&o.warmup, "warmup", 0, "")
+	fs.BoolVar(&o.failFast, "fail-fast", false, "")
+	fs.BoolVar(&o.untilFail, "until-fail", false, "")
 	fs.Float64Var(&o.threshold, "threshold", 100, "")
 	fs.IntVar(&o.showOutput, "show-output", 50, "")
 	fs.BoolVar(&o.quiet, "q", false, "")
@@ -54,8 +60,21 @@ func parseArgs(args []string) (*options, error) {
 	if fs.NArg() == 0 {
 		return nil, errors.New("missing command")
 	}
-	if o.runs < 1 {
+	runsSet := false
+	fs.Visit(func(f *flag.Flag) {
+		runsSet = runsSet || f.Name == "n" || f.Name == "runs"
+	})
+	if o.untilFail && !runsSet {
+		o.runs = 0 // keep going until something fails
+	}
+	if o.runs < 1 && !(o.runs == 0 && o.untilFail) {
 		return nil, fmt.Errorf("-n must be at least 1, got %d", o.runs)
+	}
+	if o.warmup < 0 {
+		return nil, fmt.Errorf("--warmup must not be negative, got %d", o.warmup)
+	}
+	if o.runs > 0 && o.warmup >= o.runs {
+		return nil, fmt.Errorf("--warmup %d leaves none of the %d runs to time", o.warmup, o.runs)
 	}
 	if o.parallel < 1 {
 		return nil, fmt.Errorf("-j must be at least 1, got %d", o.parallel)

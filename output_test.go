@@ -104,3 +104,19 @@ func TestProgressNarrowTerminal(t *testing.T) {
 		t.Errorf("last frame %q lost its counter", last)
 	}
 }
+
+func TestProgressUnlimited(t *testing.T) {
+	var buf bytes.Buffer
+	p := newProgress(&buf, 0, 20)
+	for i := 1; i <= 500; i++ {
+		p.add(runner.Result{Index: i, ExitCode: i % 2})
+	}
+	frames := strings.Split(buf.String(), "\r")
+	last := strings.TrimSuffix(frames[len(frames)-1], "\x1b[K")
+	if !strings.HasSuffix(last, "F.F.  500") || len(last) >= 20 {
+		t.Errorf("last frame = %q, want recent marks and a bare counter within 20 columns", last)
+	}
+	if len(p.marks) > 20 {
+		t.Errorf("progress kept %d marks for a 20-column line", len(p.marks))
+	}
+}
