@@ -174,8 +174,11 @@ Trimmed to two of the twenty runs:
 }
 ```
 
-A timed-out run has `"timed_out": true` and `"exit_code": -1`. `timed_runs` is
-how many runs the duration stats cover.
+A timed-out run has `"timed_out": true` and `"exit_code": -1`. A run killed by
+a signal gets the exit code a shell would report, 128 plus the signal number,
+and a `"signal"` field such as `"SIGSEGV"`; the text report lists it as
+`killed by SIGSEGV`. `timed_runs` is how many runs the duration stats cover,
+leaving out warmup and timed-out runs.
 
 ## Exit status
 

@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // killWholeGroup starts cmd in a process group of its own and makes
@@ -22,4 +24,20 @@ func killWholeGroup(cmd *exec.Cmd) {
 		}
 		return err
 	}
+}
+
+// exitStatus describes how a process ended. For one killed by a signal it
+// follows the shell convention of 128 plus the signal number, and also
+// returns the signal's name.
+func exitStatus(state *os.ProcessState) (code int, signal string) {
+	ws, ok := state.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() {
+		return state.ExitCode(), ""
+	}
+	sig := ws.Signal()
+	name := unix.SignalName(sig)
+	if name == "" {
+		name = sig.String()
+	}
+	return 128 + int(sig), name
 }

@@ -113,3 +113,20 @@ func TestSummarizeLeavesTimeoutsOutOfTiming(t *testing.T) {
 		t.Errorf("timing = %+v, want the two runs that finished", s.timing)
 	}
 }
+
+func TestStatus(t *testing.T) {
+	tests := []struct {
+		r    runner.Result
+		want string
+	}{
+		{runner.Result{ExitCode: 1}, "exit 1"},
+		{runner.Result{ExitCode: 2}, "exit 2"},
+		{runner.Result{ExitCode: -1, TimedOut: true}, "timeout"},
+		{runner.Result{ExitCode: 139, Signal: "SIGSEGV"}, "killed by SIGSEGV"},
+	}
+	for _, tt := range tests {
+		if got := status(tt.r); got != tt.want {
+			t.Errorf("status(%+v) = %q, want %q", tt.r, got, tt.want)
+		}
+	}
+}

@@ -48,6 +48,17 @@ func TestRunExitCode(t *testing.T) {
 	}
 }
 
+func TestRunKilledBySignal(t *testing.T) {
+	results, err := Run(context.Background(), Config{Argv: sh("kill -TERM $$"), Runs: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := results[0]
+	if r.Passed() || r.ExitCode != 128+15 || r.Signal != "SIGTERM" || r.TimedOut {
+		t.Errorf("result = %+v, want exit 143 from SIGTERM", r)
+	}
+}
+
 func TestRunMissingCommand(t *testing.T) {
 	_, err := Run(context.Background(), Config{Argv: []string{"flaky-no-such-command"}, Runs: 3})
 	if err == nil {

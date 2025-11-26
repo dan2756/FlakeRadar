@@ -19,6 +19,7 @@ type jsonReport struct {
 type jsonRun struct {
 	Index      int     `json:"index"`
 	ExitCode   int     `json:"exit_code"`
+	Signal     string  `json:"signal,omitempty"`
 	DurationMS float64 `json:"duration_ms"`
 	TimedOut   bool    `json:"timed_out"`
 	Passed     bool    `json:"passed"`
@@ -80,6 +81,7 @@ func writeJSON(w io.Writer, opts *options, results []runner.Result, s summary) e
 		rep.Runs[i] = jsonRun{
 			Index:      r.Index,
 			ExitCode:   r.ExitCode,
+			Signal:     r.Signal,
 			DurationMS: ms(float64(r.Duration)),
 			TimedOut:   r.TimedOut,
 			Passed:     r.Passed(),

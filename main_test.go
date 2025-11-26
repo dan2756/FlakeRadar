@@ -210,6 +210,25 @@ func TestInterrupted(t *testing.T) {
 	}
 }
 
+func TestKilledBySignal(t *testing.T) {
+	code, out, _ := flaky(t, "--json", "-n", "1", "kill -KILL $$")
+	if code != 1 {
+		t.Errorf("exit code %d, want 1", code)
+	}
+	var rep jsonReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if r := rep.Runs[0]; r.ExitCode != 137 || r.Signal != "SIGKILL" || r.Passed {
+		t.Errorf("run = %+v, want exit 137 from SIGKILL", r)
+	}
+
+	_, out, _ = flaky(t, "-n", "1", "kill -KILL $$")
+	if !strings.Contains(out, "  run 1  killed by SIGKILL  ") {
+		t.Errorf("failed run not shown as killed:\n%s", out)
+	}
+}
+
 func TestQuiet(t *testing.T) {
 	_, out, _ := flaky(t, "-q", "-n", "1", "echo noisy; exit 1")
 	if strings.Contains(out, "--- output") || strings.Contains(out, "\nnoisy\n") {

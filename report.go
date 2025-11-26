@@ -175,8 +175,11 @@ func writeFailures(w io.Writer, failed []runner.Result) {
 
 // status describes how a failed run ended.
 func status(r runner.Result) string {
-	if r.TimedOut {
+	switch {
+	case r.TimedOut:
 		return "timeout"
+	case r.Signal != "":
+		return "killed by " + r.Signal
 	}
 	return "exit " + strconv.Itoa(r.ExitCode)
 }

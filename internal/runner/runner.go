@@ -45,8 +45,9 @@ type Config struct {
 
 // Result is the outcome of one run.
 type Result struct {
-	Index    int // 1-based run number
-	ExitCode int // -1 if the run did not exit on its own
+	Index    int    // 1-based run number
+	ExitCode int    // 128+N if killed by signal N, -1 if it timed out
+	Signal   string // name of the signal that killed the run, e.g. "SIGSEGV"
 	TimedOut bool
 	Warmup   bool
 	Duration time.Duration
@@ -182,7 +183,7 @@ func runOnce(ctx context.Context, cfg Config, index int) (Result, error) {
 		r.TimedOut = true
 		r.ExitCode = -1
 	case errors.As(err, &exitErr):
-		r.ExitCode = exitErr.ExitCode()
+		r.ExitCode, r.Signal = exitStatus(exitErr.ProcessState)
 	default:
 		return r, fmt.Errorf("run %d: %w", index, err)
 	}
