@@ -24,30 +24,42 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 
 // prefixWriter passes output on a line at a time, each line starting with
 // a prefix, so that concurrent runs streaming to the same place stay
-// readable. A partial last line is held until it is finished or Close.
+// readable. A partial last line is held until it is finished or Close, or
+// until it reaches maxLine bytes, which are then passed on as a line of
+// their own.
 type prefixWriter struct {
 	w      io.Writer
 	prefix []byte
 	buf    []byte
 }
 
+// maxLine bounds how much of an unfinished line prefixWriter holds, so
+// output with few or no newlines can't pile up in memory.
+const maxLine = 64 << 10
+
 func newPrefixWriter(w io.Writer, prefix string) *prefixWriter {
 	return &prefixWriter{w: w, prefix: []byte(prefix)}
 }
 
 func (p *prefixWriter) Write(b []byte) (int, error) {
-	p.buf = append(p.buf, b...)
+	n := len(b)
 	for {
-		i := bytes.IndexByte(p.buf, '\n')
+		i := bytes.IndexByte(b, '\n')
 		if i < 0 {
 			break
 		}
-		p.emit(p.buf[:i+1])
-		p.buf = p.buf[i+1:]
+		p.emit(append(p.buf, b[:i+1]...))
+		p.buf = p.buf[:0]
+		b = b[i+1:]
+	}
+	p.buf = append(p.buf, b...)
+	for len(p.buf) >= maxLine {
+		p.emit(append(p.buf[:maxLine:maxLine], '\n'))
+		p.buf = p.buf[maxLine:]
 	}
 	// Errors writing the copy are not the command's problem; never let
 	// them fail the run.
-	return len(b), nil
+	return n, nil
 }
 
 func (p *prefixWriter) Close() error {
@@ -92,7 +104,11 @@ func writeOutput(w io.Writer, r runner.Result, maxLines int) {
 		return
 	}
 	header := fmt.Sprintf("--- output of run %d (%s)", r.Index, status(r))
-	if shown := bytes.Count(tail, []byte("\n")) + 1; shown < total {
+	switch shown := bytes.Count(tail, []byte("\n")) + 1; {
+	case r.OutputDropped > 0:
+		// Only the end of the output was kept, so the total is unknown.
+		header += fmt.Sprintf(", last %d lines; earlier output was dropped", shown)
+	case shown < total:
 		header += fmt.Sprintf(", last %d of %d lines", shown, total)
 	}
 	fmt.Fprintf(w, "%s ---\n%s\n\n", header, tail)

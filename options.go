@@ -82,7 +82,7 @@ func parseArgs(args []string) (*options, error) {
 	if o.timeout < 0 {
 		return nil, fmt.Errorf("--timeout must not be negative, got %v", o.timeout)
 	}
-	if o.threshold < 0 || o.threshold > 100 {
+	if !(o.threshold >= 0 && o.threshold <= 100) { // also catches NaN
 		return nil, fmt.Errorf("--threshold must be between 0 and 100, got %v", o.threshold)
 	}
 	if o.showOutput < 0 {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -130,10 +131,53 @@ func TestRunCapturesOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := string(results[0].Output); got != "out\nerr\n" {
+		t.Errorf("run 1 output = %q, want stdout and stderr together", got)
+	}
+	if results[1].Output != nil {
+		t.Errorf("run 2 output = %q, want only the first failure's output kept", results[1].Output)
+	}
+}
+
+func TestRunKeepsFirstFailureOutput(t *testing.T) {
+	// Runs print their number, and the even ones fail.
+	f := t.TempDir() + "/count"
+	script := fmt.Sprintf(`c=$(cat '%[1]s' 2>/dev/null || echo 0); c=$((c+1)); echo $c > '%[1]s'; `+
+		`echo run $c; [ $((c %% 2)) -ne 0 ]`, f)
+	results, err := Run(context.Background(), Config{Argv: sh(script), Runs: 6})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, r := range results {
-		if got := string(r.Output); got != "out\nerr\n" {
-			t.Errorf("run %d output = %q, want stdout and stderr together", r.Index, got)
+		want := ""
+		if r.Index == 2 {
+			want = "run 2\n"
 		}
+		if string(r.Output) != want {
+			t.Errorf("run %d output = %q, want %q", r.Index, r.Output, want)
+		}
+	}
+}
+
+func TestRunCapsOutput(t *testing.T) {
+	// About 1.9 MiB of output, most of which has to go.
+	results, err := Run(context.Background(), Config{
+		Argv: sh("yes 'some log line' | head -n 125000; echo the end; exit 1"),
+		Runs: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := results[0]
+	if len(r.Output) > maxOutput {
+		t.Errorf("kept %d bytes of output, want at most %d", len(r.Output), maxOutput)
+	}
+	if !strings.HasPrefix(string(r.Output), "some log line\n") || !strings.HasSuffix(string(r.Output), "\nthe end\n") {
+		t.Errorf("kept output doesn't run from a line start to the end: %q ... %q",
+			r.Output[:min(len(r.Output), 20)], r.Output[max(0, len(r.Output)-20):])
+	}
+	if total := int64(125000*len("some log line\n") + len("the end\n")); r.OutputDropped+int64(len(r.Output)) != total {
+		t.Errorf("dropped %d + kept %d bytes, want %d in all", r.OutputDropped, len(r.Output), total)
 	}
 }
 
@@ -290,11 +334,21 @@ func TestRunWarmup(t *testing.T) {
 	// two runs must each see the count they left behind.
 	dir := t.TempDir()
 	script := fmt.Sprintf(`echo $$ >> '%[1]s/log'; c=$(wc -l < '%[1]s/log'); echo $c`, dir)
+	var (
+		mu  sync.Mutex
+		out = map[int]*closeBuffer{}
+	)
 	results, err := Run(context.Background(), Config{
 		Argv:     sh(script),
 		Runs:     5,
 		Parallel: 3,
 		Warmup:   2,
+		Tee: func(index int) io.WriteCloser {
+			mu.Lock()
+			defer mu.Unlock()
+			out[index] = &closeBuffer{}
+			return out[index]
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -307,9 +361,47 @@ func TestRunWarmup(t *testing.T) {
 			t.Errorf("run %d: Warmup = %v, want %v", r.Index, r.Warmup, want)
 		}
 	}
-	for i := range 2 {
-		if got, want := strings.TrimSpace(string(results[i].Output)), fmt.Sprint(i+1); got != want {
-			t.Errorf("warmup run %d saw count %s, want %s", i+1, got, want)
+	for i := 1; i <= 2; i++ {
+		if got, want := strings.TrimSpace(out[i].String()), fmt.Sprint(i); got != want {
+			t.Errorf("warmup run %d saw count %s, want %s", i, got, want)
 		}
+	}
+}
+
+func TestRunBackgroundChildHoldsOutput(t *testing.T) {
+	// The backgrounded sleep keeps the output pipe open after sh exits 1.
+	// The run lasts as long as sh does, and is a failure, not a timeout.
+	results, err := Run(context.Background(), Config{
+		Argv:    sh("sleep 3 & echo started; exit 1"),
+		Runs:    1,
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := results[0]
+	if r.TimedOut || r.ExitCode != 1 {
+		t.Errorf("result = %+v, want exit 1", r)
+	}
+	if r.Duration >= time.Second {
+		t.Errorf("duration %v includes the wait for the background sleep", r.Duration)
+	}
+	if string(r.Output) != "started\n" {
+		t.Errorf("output = %q, want %q", r.Output, "started\n")
+	}
+}
+
+func TestRunHugeRunLimit(t *testing.T) {
+	// Nothing may be sized by the number of runs asked for.
+	results, err := Run(context.Background(), Config{
+		Argv:          sh("exit 1"),
+		Runs:          math.MaxInt,
+		StopOnFailure: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Passed() {
+		t.Errorf("results = %+v, want one failure", results)
 	}
 }

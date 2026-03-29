@@ -3,11 +3,11 @@
 package runner
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"slices"
 	"sync"
@@ -51,7 +51,14 @@ type Result struct {
 	TimedOut bool
 	Warmup   bool
 	Duration time.Duration
-	Output   []byte // stdout and stderr, interleaved as written
+
+	// Output is stdout and stderr, interleaved as written. To keep memory
+	// bounded over thousands of runs, Run keeps it only for the
+	// lowest-numbered failed run, and only its last 1 MiB; it is nil for
+	// every other result.
+	Output []byte
+	// OutputDropped counts the bytes cut from the start of Output.
+	OutputDropped int64
 }
 
 // Passed reports whether the run exited 0 within its time limit.
@@ -72,7 +79,7 @@ func Run(ctx context.Context, cfg Config) ([]Result, error) {
 
 	var (
 		mu       sync.Mutex
-		results  = make([]Result, 0, cfg.Runs)
+		done     = newCollector()
 		firstErr error
 	)
 	record := func(r Result, err error) {
@@ -80,7 +87,7 @@ func Run(ctx context.Context, cfg Config) ([]Result, error) {
 		defer mu.Unlock()
 		switch {
 		case err == nil:
-			results = append(results, r)
+			r = done.add(r)
 			if cfg.OnResult != nil {
 				cfg.OnResult(r)
 			}
@@ -126,6 +133,7 @@ feed:
 	close(jobs)
 	wg.Wait()
 
+	results := done.results
 	slices.SortFunc(results, func(a, b Result) int { return a.Index - b.Index })
 	return results, firstErr
 }
@@ -141,37 +149,51 @@ func runOnce(ctx context.Context, cfg Config, index int) (Result, error) {
 		defer cancel()
 	}
 
-	var out bytes.Buffer
-	var w io.Writer = &out
+	out := newTailBuffer(maxOutput)
+	var w io.Writer = out
 	if cfg.Tee != nil {
 		tee := cfg.Tee(index)
 		defer tee.Close()
-		w = io.MultiWriter(&out, tee)
+		w = io.MultiWriter(out, tee)
 	}
 
+	// The command writes to a pipe of our own rather than to w, so that
+	// Wait returns as soon as it exits. Something it left running in the
+	// background may hold the pipe open for longer, and that is neither
+	// part of the run's duration nor a reason to call it a timeout.
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return Result{}, fmt.Errorf("run %d: %w", index, err)
+	}
 	cmd := exec.CommandContext(runCtx, cfg.Argv[0], cfg.Argv[1:]...)
-	cmd.Stdout = w
-	cmd.Stderr = w
-	cmd.WaitDelay = waitDelay
+	cmd.Stdout = pw
+	cmd.Stderr = pw
 	killWholeGroup(cmd)
 
 	start := time.Now()
-	err := cmd.Run()
-	r := Result{
-		Index:    index,
-		Warmup:   index <= cfg.Warmup,
-		Duration: time.Since(start),
-		Output:   out.Bytes(),
+	err = cmd.Start()
+	pw.Close() // the command has its own copy
+	waitOutput := copyOutput(w, pr)
+	if err == nil {
+		err = cmd.Wait()
 	}
-	if errors.Is(err, exec.ErrWaitDelay) {
-		// The command exited 0 but left something running that still
-		// holds its output open. The exit status is what counts.
-		err = nil
+	elapsed := time.Since(start)
+	timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
+	stopping := ctx.Err() != nil
+	waitOutput()
+
+	output := out.Bytes() // may count a partial first line as dropped
+	r := Result{
+		Index:         index,
+		Warmup:        index <= cfg.Warmup,
+		Duration:      elapsed,
+		Output:        output,
+		OutputDropped: out.dropped,
 	}
 	if err == nil {
 		return r, nil
 	}
-	if ctx.Err() != nil {
+	if stopping {
 		// Killed because Run is stopping, not because of anything the
 		// command did.
 		return r, errCanceled
@@ -179,7 +201,7 @@ func runOnce(ctx context.Context, cfg Config, index int) (Result, error) {
 
 	var exitErr *exec.ExitError
 	switch {
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+	case timedOut:
 		r.TimedOut = true
 		r.ExitCode = -1
 	case errors.As(err, &exitErr):
@@ -188,4 +210,24 @@ func runOnce(ctx context.Context, cfg Config, index int) (Result, error) {
 		return r, fmt.Errorf("run %d: %w", index, err)
 	}
 	return r, nil
+}
+
+// copyOutput copies what the command writes to r on to w, in the
+// background. Once the command has exited, wait waits for the copy to
+// reach the end of the output, but no longer than waitDelay, and closes r.
+func copyOutput(w io.Writer, r *os.File) (wait func()) {
+	done := make(chan struct{})
+	go func() {
+		io.Copy(w, r)
+		close(done)
+	}()
+	return func() {
+		defer r.Close()
+		select {
+		case <-done:
+		case <-time.After(waitDelay):
+			r.Close() // ends the copy
+			<-done
+		}
+	}
 }

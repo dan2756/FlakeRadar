@@ -31,29 +31,30 @@ it takes. A single argument containing spaces or shell syntax is run with
 sh -c.
 
 Flags:
-  -n, --runs N       number of runs (default 10)
-  -j, --parallel N   run up to N at once (default 1)
-  -t, --timeout D    kill a run after D (e.g. 30s, 2m) and count it as a
-                     failure; the whole process group is killed
-      --show-output N
-                     show the last N lines of the first failed run's
-                     output (default 50, 0 for all of it)
-      --fail-fast    stop at the first failure
-      --until-fail   keep going until a run fails: up to -n runs if -n is
-                     given, with no limit otherwise
-      --warmup K     run K runs first, one at a time, and leave them out of
-                     the timing stats (they still count as passes or fails)
-      --threshold P  minimum pass rate, in percent, for exit status 0
-                     (default 100)
-      --json         print the result as JSON: every run plus the summary
-  -q, --quiet        show neither command output nor progress
-  -v, --verbose      stream every run's output as it happens, each line
-                     prefixed with its run number
-  -h, --help         show this help
-      --version      print the version and exit
+  -n, --runs N          number of runs (default 10)
+  -j, --parallel N      run up to N at once (default 1)
+  -t, --timeout D       kill a run after D (e.g. 30s, 2m) and count it as a
+                        failure; the whole process group is killed
+      --fail-fast       stop at the first failure
+      --until-fail      keep going until a run fails: up to -n runs if -n
+                        is given, with no limit otherwise
+      --warmup K        run K runs first, one at a time, and leave them out
+                        of the timing stats (they still count as passes or
+                        fails)
+      --threshold P     minimum pass rate, in percent, for exit status 0
+                        (default 100)
+      --json            print the result as JSON: every run plus a summary
+      --show-output N   show the last N lines of the first failed run's
+                        output (default 50, 0 for all that was kept)
+  -q, --quiet           show neither command output nor progress
+  -v, --verbose         stream every run's output as it happens, each line
+                        prefixed with its run number
+  -h, --help            show this help
+      --version         print the version and exit
 
-Output is captured rather than streamed. On a terminal, a progress line shows
-"." for each pass and "F" for each failure.
+Output is captured rather than streamed; the last 1 MiB of the first failed
+run's output is kept. On a terminal, a progress line shows "." for each pass
+and "F" for each failure.
 
 With --fail-fast or --until-fail, runs still in flight when a failure comes
 in are killed and left out. Ctrl-C does the same and reports what finished.
@@ -76,12 +77,22 @@ func main() {
 		con.width, _, _ = term.GetSize(fd)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Losing the terminal (SIGHUP) or whoever reads stdout (SIGPIPE, as in
+	// flaky -v ... | head) winds flaky down like Ctrl-C, so the runs in
+	// flight are killed rather than left running unsupervised. Under
+	// nohup, SIGHUP stays ignored.
+	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGPIPE}
+	if !signal.Ignored(syscall.SIGHUP) {
+		sigs = append(sigs, syscall.SIGHUP)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), sigs...)
 	go func() {
 		// After the first Ctrl-C, flaky winds down and reports; a second
-		// one gets the default behaviour and exits at once.
+		// one gets the default behaviour and exits at once. SIGHUP and
+		// SIGPIPE stay caught, so that writing to the lost output fails
+		// instead of killing flaky before it has killed the runs.
 		<-ctx.Done()
-		stop()
+		signal.Reset(os.Interrupt, syscall.SIGTERM)
 	}()
 	code := run(ctx, os.Args[1:], con)
 	stop()

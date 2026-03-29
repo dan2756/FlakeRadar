@@ -48,6 +48,31 @@ func TestPrefixWriter(t *testing.T) {
 	}
 }
 
+func TestPrefixWriterLongLine(t *testing.T) {
+	var buf bytes.Buffer
+	w := newPrefixWriter(&buf, "[1] ")
+	chunk := bytes.Repeat([]byte("x"), 1000)
+	for range 3 * maxLine / len(chunk) {
+		w.Write(chunk)
+		if cap(w.buf) > 4*maxLine {
+			t.Fatalf("holding %d bytes of an unfinished line", cap(w.buf))
+		}
+	}
+	w.Write([]byte("end\n"))
+	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want the long line in 3 pieces", len(lines))
+	}
+	for i, line := range lines[:2] {
+		if want := "[1] " + strings.Repeat("x", maxLine); line != want {
+			t.Errorf("piece %d is %d bytes, want %d", i+1, len(line), len(want))
+		}
+	}
+	if !strings.HasPrefix(lines[2], "[1] x") || !strings.HasSuffix(lines[2], "xend") {
+		t.Errorf("last piece = %.20q...", lines[2])
+	}
+}
+
 func TestWriteOutput(t *testing.T) {
 	var lines []string
 	for i := 1; i <= 8; i++ {
@@ -60,6 +85,14 @@ func TestWriteOutput(t *testing.T) {
 	want := "--- output of run 4 (exit 1), last 3 of 8 lines ---\nline 6\nline 7\nline 8\n\n"
 	if buf.String() != want {
 		t.Errorf("writeOutput = %q, want %q", buf.String(), want)
+	}
+
+	buf.Reset()
+	r.OutputDropped = 4 << 20
+	writeOutput(&buf, r, 2)
+	want = "--- output of run 4 (exit 1), last 2 lines; earlier output was dropped ---\nline 7\nline 8\n\n"
+	if buf.String() != want {
+		t.Errorf("writeOutput after dropping output = %q, want %q", buf.String(), want)
 	}
 
 	buf.Reset()

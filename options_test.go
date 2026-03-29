@@ -61,6 +61,7 @@ func TestParseArgsErrors(t *testing.T) {
 		{"--threshold", "101", "true"},
 		{"--threshold", "-5", "true"},
 		{"--threshold", "most", "true"},
+		{"--threshold", "NaN", "true"},
 		{"-q", "-v", "true"},
 		{"--warmup", "-1", "true"},
 		{"-n", "5", "--warmup", "5", "true"},

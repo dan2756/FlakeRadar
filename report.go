@@ -17,7 +17,7 @@ const (
 	maxListed  = 20 // failed runs listed before the rest are summarized
 )
 
-// Why a run of runs ended early.
+// Reasons for stopping before all the runs asked for were done.
 const (
 	stoppedFailure     = "failure"
 	stoppedInterrupted = "interrupted"
@@ -139,7 +139,11 @@ func writeTiming(w io.Writer, s summary) {
 
 	t := s.timing
 	if t.N == 0 {
-		field(w, "timing", "n/a ("+note+")")
+		v := "n/a"
+		if note != "" {
+			v += " (" + note + ")"
+		}
+		field(w, "timing", v)
 		return
 	}
 	labels := []string{"min", "mean", "median", "p95", "max", "stddev", "cv"}

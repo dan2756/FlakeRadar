@@ -43,8 +43,8 @@ Pass `-count=1` to `go test`, or it will happily serve the first result from
 its cache for every run after that.
 
 ```
-$ flaky -n 20 --timeout 30s -- go test -count=1 ./pkg/...
-....F.........F.....  20/20
+$ flaky -n 20 --timeout 30s --show-output 4 -- go test -count=1 ./pkg/...
+......F.......F.....  20/20
 --- output of run 7 (exit 1), last 4 of 212 lines ---
 --- FAIL: TestCacheEviction (0.02s)
     cache_test.go:41: got 3 entries, want 2
@@ -101,7 +101,15 @@ commands.
 Command output (stdout and stderr together) is captured, not streamed. When
 everything is done, flaky prints the output of the first failed run, then the
 report. `--verbose` streams all of it instead, line by line with the run number
-in front, which stays readable with `-j`.
+in front, which stays readable with `-j`. A line longer than 64 KiB is passed
+on in 64 KiB pieces, each on a line of its own.
+
+To keep memory flat over thousands of runs, only the first failed run's output
+is kept, and only its last 1 MiB. When the start had to go, the header says so:
+
+```
+--- output of run 412 (exit 1), last 50 lines; earlier output was dropped ---
+```
 
 While runs are going, a progress line on stderr shows `.` for each pass and `F`
 for each failure, with a counter. It is only drawn when stderr is a terminal,
@@ -141,9 +149,15 @@ so a cold build cache or first-run compile doesn't skew it.
 ## Timeouts
 
 Each run starts in its own process group. On a timeout, or when flaky itself is
-interrupted, the whole group is killed, so `go test`'s test binaries and every
-stage of a pipeline go with it. Timed-out runs count as failures but are left
-out of the timing numbers, since their duration is just the limit.
+interrupted, terminated, hung up on or finds its output pipe closed (`flaky -v
+... | head`), the whole group is killed, so `go test`'s test binaries and every
+stage of a pipeline go with it. Only a SIGKILL, which can't be caught, leaves
+the runs in flight running. Timed-out runs count as failures but are left out
+of the timing numbers, since their duration is just the limit.
+
+A run's duration ends when the command exits. If it leaves something running in
+the background that keeps its output open, flaky reads on for up to 2 seconds,
+but that time doesn't count toward the duration or the timeout.
 
 ## JSON
 
@@ -179,6 +193,15 @@ a signal gets the exit code a shell would report, 128 plus the signal number,
 and a `"signal"` field such as `"SIGSEGV"`; the text report lists it as
 `killed by SIGSEGV`. `timed_runs` is how many runs the duration stats cover,
 leaving out warmup and timed-out runs.
+
+## Platform notes
+
+flaky runs on Linux and macOS. Process groups, killing a whole group on a
+timeout and reporting signals (`killed by SIGSEGV`) rely on Unix; built for
+another system it still works, but a timeout kills only the top process.
+
+Commands run with flaky's environment and working directory, stdin connected
+to `/dev/null`. There is no config file and no environment variables to set.
 
 ## Exit status
 
