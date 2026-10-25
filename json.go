@@ -59,7 +59,7 @@ func writeJSON(w io.Writer, opts *options, results []runner.Result, s summary) e
 			Runs:      s.runs,
 			Passes:    s.passes,
 			Fails:     len(s.failed),
-			PassRate:  round(s.passRate(), 4),
+			PassRate:  jsonPassRate(s.passes, s.runs),
 			Threshold: s.threshold,
 			OK:        s.ok(),
 			Stopped:   s.stopped,
@@ -95,6 +95,28 @@ func writeJSON(w io.Writer, opts *options, results []runner.Result, s summary) e
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(rep)
+}
+
+// jsonPassRate rounds the pass rate for the summary. Four decimal places is
+// enough for an ordinary sample, but the rounded value must not be 0 or 100
+// unless the rate really is: that would hide a pass or a failure, which the
+// text report already refuses to do.
+func jsonPassRate(passes, runs int) float64 {
+	if runs == 0 {
+		return 0
+	}
+	rate := 100 * float64(passes) / float64(runs)
+	for places := 4; places <= 12; places++ {
+		rounded := round(rate, places)
+		if passes != runs && rounded >= 100 {
+			continue
+		}
+		if passes != 0 && rounded == 0 {
+			continue
+		}
+		return rounded
+	}
+	return rate
 }
 
 // ms converts nanoseconds to milliseconds, kept to microsecond precision.
