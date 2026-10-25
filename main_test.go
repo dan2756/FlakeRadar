@@ -114,6 +114,63 @@ func TestJSON(t *testing.T) {
 	}
 }
 
+func TestJSONPassRateDoesNotHideExtremes(t *testing.T) {
+	// Four decimal places would turn these into 100 and 0, hiding the one
+	// run that went the other way. The text report already refuses to.
+	cases := []struct {
+		passes, runs int
+		threshold    float64
+		wantOK       bool
+		check        func(t *testing.T, rate float64, raw string)
+	}{
+		{2, 4, 50, true, func(t *testing.T, rate float64, _ string) {
+			if rate != 50 {
+				t.Errorf("pass_rate = %v, want 50", rate)
+			}
+		}},
+		{10, 10, 100, true, func(t *testing.T, rate float64, _ string) {
+			if rate != 100 {
+				t.Errorf("pass_rate = %v, want 100", rate)
+			}
+		}},
+		{0, 10, 0, true, func(t *testing.T, rate float64, _ string) {
+			if rate != 0 {
+				t.Errorf("pass_rate = %v, want 0", rate)
+			}
+		}},
+		{2, 3, 100, false, func(t *testing.T, rate float64, _ string) {
+			if rate != 66.6667 {
+				t.Errorf("pass_rate = %v, want 66.6667", rate)
+			}
+		}},
+		{9999999, 10000000, 100, false, func(t *testing.T, rate float64, raw string) {
+			if rate >= 100 || strings.Contains(raw, `"pass_rate": 100`) {
+				t.Errorf("pass_rate = %v hides the failure:\n%s", rate, raw)
+			}
+		}},
+		{1, 10000000, 0, true, func(t *testing.T, rate float64, raw string) {
+			if rate == 0 {
+				t.Errorf("pass_rate = 0 hides the pass:\n%s", raw)
+			}
+		}},
+	}
+	for _, tt := range cases {
+		s := summary{runs: tt.runs, passes: tt.passes, threshold: tt.threshold}
+		var buf bytes.Buffer
+		if err := writeJSON(&buf, &options{threshold: tt.threshold}, nil, s); err != nil {
+			t.Fatalf("writeJSON(%d/%d): %v", tt.passes, tt.runs, err)
+		}
+		var rep jsonReport
+		if err := json.Unmarshal(buf.Bytes(), &rep); err != nil {
+			t.Fatalf("unmarshal %d/%d: %v\n%s", tt.passes, tt.runs, err, buf.String())
+		}
+		if rep.Summary.OK != tt.wantOK {
+			t.Errorf("%d/%d at %v%%: ok = %v, want %v", tt.passes, tt.runs, tt.threshold, rep.Summary.OK, tt.wantOK)
+		}
+		tt.check(t, rep.Summary.PassRate, buf.String())
+	}
+}
+
 func TestJSONTimeout(t *testing.T) {
 	code, out, _ := flaky(t, "--json", "-n", "1", "--timeout", "50ms", "--", "sleep", "5")
 	if code != 1 {
