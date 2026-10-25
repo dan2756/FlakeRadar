@@ -178,38 +178,57 @@ func runOnce(ctx context.Context, cfg Config, index int) (Result, error) {
 		err = cmd.Wait()
 	}
 	elapsed := time.Since(start)
-	timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
-	stopping := ctx.Err() != nil
+	// Classify before draining output. A background child can hold the pipe
+	// open for up to waitDelay, and that wait is not part of the run: it
+	// must not turn one that already finished into a timeout.
+	r, err := interpretWait(ctx, runCtx, cmd.ProcessState, err)
 	waitOutput()
-
-	output := out.Bytes() // may count a partial first line as dropped
-	r := Result{
-		Index:         index,
-		Warmup:        index <= cfg.Warmup,
-		Duration:      elapsed,
-		Output:        output,
-		OutputDropped: out.dropped,
+	if err != nil {
+		if errors.Is(err, errCanceled) {
+			return Result{}, errCanceled
+		}
+		return Result{}, fmt.Errorf("run %d: %w", index, err)
 	}
-	if err == nil {
-		return r, nil
+	r.Index = index
+	r.Warmup = index <= cfg.Warmup
+	r.Duration = elapsed
+	r.Output = out.Bytes() // may count a partial first line as dropped
+	r.OutputDropped = out.dropped
+	return r, nil
+}
+
+// interpretWait turns what Cmd.Wait returned into a run result.
+//
+// Cancel kills the process group. Killing a zombie still succeeds, so if the
+// command has already exited 0, Wait substitutes the context error and a
+// pass would otherwise be reported as a timeout or dropped. A non-zero exit
+// the command produced itself is a finished run too, and is kept when Run is
+// stopping. A run killed by a signal while stopping is left out; one killed
+// after its deadline is a timeout.
+func interpretWait(parent, runCtx context.Context, state *os.ProcessState, waitErr error) (Result, error) {
+	if waitErr != nil && state != nil && state.Success() {
+		waitErr = nil
+	}
+	if waitErr == nil {
+		return Result{}, nil
+	}
+	stopping := parent.Err() != nil
+	var exitErr *exec.ExitError
+	if stopping && errors.As(waitErr, &exitErr) && finishedVoluntarily(exitErr.ProcessState) {
+		code, sig := exitStatus(exitErr.ProcessState)
+		return Result{ExitCode: code, Signal: sig}, nil
 	}
 	if stopping {
-		// Killed because Run is stopping, not because of anything the
-		// command did.
-		return r, errCanceled
+		return Result{}, errCanceled
 	}
-
-	var exitErr *exec.ExitError
-	switch {
-	case timedOut:
-		r.TimedOut = true
-		r.ExitCode = -1
-	case errors.As(err, &exitErr):
-		r.ExitCode, r.Signal = exitStatus(exitErr.ProcessState)
-	default:
-		return r, fmt.Errorf("run %d: %w", index, err)
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		return Result{ExitCode: -1, TimedOut: true}, nil
 	}
-	return r, nil
+	if errors.As(waitErr, &exitErr) {
+		code, sig := exitStatus(exitErr.ProcessState)
+		return Result{ExitCode: code, Signal: sig}, nil
+	}
+	return Result{}, waitErr
 }
 
 // copyOutput copies what the command writes to r on to w, in the

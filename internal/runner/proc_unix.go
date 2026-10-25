@@ -26,6 +26,13 @@ func killWholeGroup(cmd *exec.Cmd) {
 	}
 }
 
+// finishedVoluntarily reports whether the process exited by itself rather
+// than being killed by a signal.
+func finishedVoluntarily(state *os.ProcessState) bool {
+	ws, ok := state.Sys().(syscall.WaitStatus)
+	return ok && !ws.Signaled()
+}
+
 // exitStatus describes how a process ended. For one killed by a signal it
 // follows the shell convention of 128 plus the signal number, and also
 // returns the signal's name.

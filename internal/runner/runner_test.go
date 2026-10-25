@@ -3,9 +3,12 @@ package runner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -388,6 +391,122 @@ func TestRunBackgroundChildHoldsOutput(t *testing.T) {
 	}
 	if string(r.Output) != "started\n" {
 		t.Errorf("output = %q, want %q", r.Output, "started\n")
+	}
+}
+
+func stateOf(t *testing.T, script string) (*os.ProcessState, error) {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", script)
+	err := cmd.Run()
+	if cmd.ProcessState == nil {
+		t.Fatalf("%q produced no process state: %v", script, err)
+	}
+	return cmd.ProcessState, err
+}
+
+func TestInterpretWait(t *testing.T) {
+	passState, passErr := stateOf(t, "exit 0")
+	if passErr != nil || !passState.Success() {
+		t.Fatalf("exit 0: err=%v state=%v", passErr, passState)
+	}
+	failState, failErr := stateOf(t, "exit 3")
+	termState, termErr := stateOf(t, "kill -TERM $$")
+	killState, killErr := stateOf(t, "kill -KILL $$")
+
+	parent, stop := context.WithCancel(context.Background())
+	stop()
+	deadline, cancelDeadline := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	defer cancelDeadline()
+	if !errors.Is(deadline.Err(), context.DeadlineExceeded) {
+		t.Fatal("deadline context is not expired")
+	}
+	alive := context.Background()
+
+	tests := []struct {
+		name           string
+		parent, runCtx context.Context
+		state          *os.ProcessState
+		err            error
+		wantCode       int
+		wantSignal     string
+		wantTimeout    bool
+		wantCanceled   bool
+		wantPlainErr   bool
+	}{
+		{
+			name:   "success stands when the deadline error races in",
+			parent: alive, runCtx: deadline,
+			state: passState, err: context.DeadlineExceeded,
+		},
+		{
+			name:   "success stands when stop races in",
+			parent: parent, runCtx: parent,
+			state: passState, err: context.Canceled,
+		},
+		{
+			name:   "finished non-zero exit is kept when stopping",
+			parent: parent, runCtx: parent,
+			state: failState, err: failErr,
+			wantCode: 3,
+		},
+		{
+			name:   "deadline still wins over a non-zero exit",
+			parent: alive, runCtx: deadline,
+			state: failState, err: failErr,
+			wantCode: -1, wantTimeout: true,
+		},
+		{
+			name:   "signal death while stopping is dropped",
+			parent: parent, runCtx: parent,
+			state: killState, err: killErr,
+			wantCanceled: true,
+		},
+		{
+			name:   "killed after the deadline is a timeout",
+			parent: alive, runCtx: deadline,
+			state: killState, err: killErr,
+			wantCode: -1, wantTimeout: true,
+		},
+		{
+			name:   "a signal the command raised itself is reported",
+			parent: alive, runCtx: alive,
+			state: termState, err: termErr,
+			wantCode: 128 + 15, wantSignal: "SIGTERM",
+		},
+		{
+			name:   "start failure while stopping is dropped",
+			parent: parent, runCtx: parent,
+			err:          errors.New("executable file not found"),
+			wantCanceled: true,
+		},
+		{
+			name:   "start failure is returned",
+			parent: alive, runCtx: alive,
+			err:          errors.New("executable file not found"),
+			wantPlainErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, err := interpretWait(tt.parent, tt.runCtx, tt.state, tt.err)
+			switch {
+			case tt.wantCanceled:
+				if !errors.Is(err, errCanceled) {
+					t.Fatalf("err = %v, want errCanceled", err)
+				}
+			case tt.wantPlainErr:
+				if err == nil || errors.Is(err, errCanceled) {
+					t.Fatalf("err = %v, want the wait error", err)
+				}
+			default:
+				if err != nil {
+					t.Fatalf("err = %v", err)
+				}
+			}
+			if r.ExitCode != tt.wantCode || r.Signal != tt.wantSignal || r.TimedOut != tt.wantTimeout {
+				t.Fatalf("result = %+v, want code %d signal %q timeout %v", r, tt.wantCode, tt.wantSignal, tt.wantTimeout)
+			}
+		})
 	}
 }
 
