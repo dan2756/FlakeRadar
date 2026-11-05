@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dan2756/flaky/internal/runner"
+	"github.com/dan2756/FlakeRadar/internal/runner"
 )
 
 func TestLastLines(t *testing.T) {

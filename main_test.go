@@ -327,10 +327,10 @@ func TestUsageErrors(t *testing.T) {
 	} {
 		code, _, errOut := flaky(t, args...)
 		if code != 2 {
-			t.Errorf("flaky %q: exit code %d, want 2", args, code)
+			t.Errorf("FlakeRadar %q: exit code %d, want 2", args, code)
 		}
-		if !strings.Contains(errOut, "flaky: ") {
-			t.Errorf("flaky %q: no error message, stderr %q", args, errOut)
+		if !strings.Contains(errOut, "FlakeRadar: ") {
+			t.Errorf("FlakeRadar %q: no error message, stderr %q", args, errOut)
 		}
 	}
 }
@@ -343,10 +343,10 @@ func TestMissingCommand(t *testing.T) {
 }
 
 func TestHelpAndVersion(t *testing.T) {
-	if code, out, _ := flaky(t, "--help"); code != 0 || !strings.HasPrefix(out, "Usage: flaky") {
+	if code, out, _ := flaky(t, "--help"); code != 0 || !strings.HasPrefix(out, "Usage: FlakeRadar") {
 		t.Errorf("--help: exit code %d, output %q", code, out)
 	}
-	if code, out, _ := flaky(t, "--version"); code != 0 || !strings.HasPrefix(out, "flaky ") {
+	if code, out, _ := flaky(t, "--version"); code != 0 || !strings.HasPrefix(out, "FlakeRadar ") {
 		t.Errorf("--version: exit code %d, output %q", code, out)
 	}
 }

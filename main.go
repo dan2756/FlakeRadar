@@ -1,4 +1,4 @@
-// Command flaky runs a command several times and reports how often it
+// Command FlakeRadar runs a command several times and reports how often it
 // passes and how much its run time varies.
 package main
 
@@ -17,14 +17,14 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/dan2756/flaky/internal/runner"
+	"github.com/dan2756/FlakeRadar/internal/runner"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = `Usage: flaky [flags] [--] command [args...]
-       flaky [flags] 'shell command'
+const usage = `Usage: FlakeRadar [flags] [--] command [args...]
+       FlakeRadar [flags] 'shell command'
 
 Run a command several times and report how often it passes and how long
 it takes. A single argument containing spaces or shell syntax is run with
@@ -63,7 +63,7 @@ Exit status is 0 if the pass rate is at least --threshold, 1 if not, 2 on
 usage errors and 130 if interrupted.
 `
 
-// console is where flaky writes, and what it knows about the terminal.
+// console is where FlakeRadar writes, and what it knows about the terminal.
 type console struct {
 	stdout, stderr io.Writer
 	tty            bool // stderr is a terminal
@@ -78,19 +78,19 @@ func main() {
 	}
 
 	// Losing the terminal (SIGHUP) or whoever reads stdout (SIGPIPE, as in
-	// flaky -v ... | head) winds flaky down like Ctrl-C, so the runs in
-	// flight are killed rather than left running unsupervised. Under
-	// nohup, SIGHUP stays ignored.
+	// FlakeRadar -v ... | head) winds FlakeRadar down like Ctrl-C, so the
+	// runs in flight are killed rather than left running unsupervised.
+	// Under nohup, SIGHUP stays ignored.
 	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGPIPE}
 	if !signal.Ignored(syscall.SIGHUP) {
 		sigs = append(sigs, syscall.SIGHUP)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), sigs...)
 	go func() {
-		// After the first Ctrl-C, flaky winds down and reports; a second
+		// After the first Ctrl-C, FlakeRadar winds down and reports; a second
 		// one gets the default behaviour and exits at once. SIGHUP and
 		// SIGPIPE stay caught, so that writing to the lost output fails
-		// instead of killing flaky before it has killed the runs.
+		// instead of killing FlakeRadar before it has killed the runs.
 		<-ctx.Done()
 		signal.Reset(os.Interrupt, syscall.SIGTERM)
 	}()
@@ -107,15 +107,15 @@ func run(ctx context.Context, args []string, con console) int {
 		fmt.Fprint(stdout, usage)
 		return 0
 	case err != nil:
-		fmt.Fprintf(stderr, "flaky: %v\nRun 'flaky --help' for usage.\n", err)
+		fmt.Fprintf(stderr, "FlakeRadar: %v\nRun 'FlakeRadar --help' for usage.\n", err)
 		return 2
 	case opts.version:
-		fmt.Fprintf(stdout, "flaky %s\n", buildVersion())
+		fmt.Fprintf(stdout, "FlakeRadar %s\n", buildVersion())
 		return 0
 	}
 
 	if _, err := exec.LookPath(opts.argv[0]); err != nil {
-		fmt.Fprintf(stderr, "flaky: %v\n", err)
+		fmt.Fprintf(stderr, "FlakeRadar: %v\n", err)
 		return 2
 	}
 
@@ -150,12 +150,12 @@ func run(ctx context.Context, args []string, con console) int {
 		prog.finish()
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "flaky: %v\n", err)
+		fmt.Fprintf(stderr, "FlakeRadar: %v\n", err)
 		return 2
 	}
 	interrupted := ctx.Err() != nil
 	if interrupted && len(results) == 0 {
-		fmt.Fprintln(stderr, "flaky: interrupted before any run finished")
+		fmt.Fprintln(stderr, "FlakeRadar: interrupted before any run finished")
 		return 130
 	}
 
@@ -169,7 +169,7 @@ func run(ctx context.Context, args []string, con console) int {
 	switch {
 	case opts.json:
 		if err := writeJSON(stdout, opts, results, s); err != nil {
-			fmt.Fprintf(stderr, "flaky: %v\n", err)
+			fmt.Fprintf(stderr, "FlakeRadar: %v\n", err)
 			return 2
 		}
 	default:

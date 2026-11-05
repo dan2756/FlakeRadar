@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dan2756/flaky/internal/runner"
+	"github.com/dan2756/FlakeRadar/internal/runner"
 )
 
 // progress draws one mark per finished run, "." for a pass and "F" for a

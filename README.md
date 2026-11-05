@@ -1,22 +1,22 @@
-# flaky
+# FlakeRadar
 
 Run a command N times and see how often it passes and how long it takes.
 
-`flaky` is for the test that fails "sometimes": run it twenty times, get a pass
+`FlakeRadar` is for the test that fails "sometimes": run it twenty times, get a pass
 rate, the run numbers that failed and the output of the first one, and stop
 guessing.
 
 ## Install
 
 ```sh
-go install github.com/dan2756/flaky@latest
+go install github.com/dan2756/FlakeRadar@latest
 ```
 
 ## Usage
 
 ```sh
-flaky [flags] [--] command [args...]
-flaky [flags] 'shell command'
+FlakeRadar [flags] [--] command [args...]
+FlakeRadar [flags] 'shell command'
 ```
 
 Everything after `--` is the command and its arguments. A single quoted argument
@@ -24,26 +24,26 @@ that contains spaces or shell syntax is run with `sh -c`.
 
 ```sh
 # Is it flaky?
-flaky -n 20 -- go test -count=1 ./pkg/...
+FlakeRadar -n 20 -- go test -count=1 ./pkg/...
 
 # Hammer one test, eight at a time, killing any run that hangs.
-flaky -n 200 -j 8 --timeout 30s -- go test -count=1 -run 'TestCache$' ./cache
+FlakeRadar -n 200 -j 8 --timeout 30s -- go test -count=1 -run 'TestCache$' ./cache
 
 # Keep going until it breaks, then show why.
-flaky --until-fail -j 4 -- go test -count=1 -race -run TestScheduler ./sched
+FlakeRadar --until-fail -j 4 -- go test -count=1 -race -run TestScheduler ./sched
 
 # Anything a shell can run.
-flaky -n 50 'make integration 2>&1 | grep -v DEBUG'
+FlakeRadar -n 50 'make integration 2>&1 | grep -v DEBUG'
 
 # Gate CI on "passes at least 95% of the time".
-flaky -n 40 --threshold 95 --quiet -- ./scripts/e2e.sh
+FlakeRadar -n 40 --threshold 95 --quiet -- ./scripts/e2e.sh
 ```
 
 Pass `-count=1` to `go test`, or it will happily serve the first result from
 its cache for every run after that.
 
 ```
-$ flaky -n 20 --timeout 30s --show-output 4 -- go test -count=1 ./pkg/...
+$ FlakeRadar -n 20 --timeout 30s --show-output 4 -- go test -count=1 ./pkg/...
 ......F.......F.....  20/20
 --- output of run 7 (exit 1), last 4 of 212 lines ---
 --- FAIL: TestCacheEviction (0.02s)
@@ -99,7 +99,7 @@ commands.
 ## Output
 
 Command output (stdout and stderr together) is captured, not streamed. When
-everything is done, flaky prints the output of the first failed run, then the
+everything is done, FlakeRadar prints the output of the first failed run, then the
 report. `--verbose` streams all of it instead, line by line with the run number
 in front, which stays readable with `-j`. A line longer than 64 KiB is passed
 on in 64 KiB pieces, each on a line of its own.
@@ -122,7 +122,7 @@ so logs and pipes get plain output.
 run's output:
 
 ```
-$ flaky --until-fail -j 4 -- go test -count=1 -race -run TestScheduler ./sched
+$ FlakeRadar --until-fail -j 4 -- go test -count=1 -race -run TestScheduler ./sched
 ............................................................F  61
 --- output of run 63 (exit 1) ---
 --- FAIL: TestScheduler (0.31s)
@@ -148,15 +148,15 @@ so a cold build cache or first-run compile doesn't skew it.
 
 ## Timeouts
 
-Each run starts in its own process group. On a timeout, or when flaky itself is
-interrupted, terminated, hung up on or finds its output pipe closed (`flaky -v
+Each run starts in its own process group. On a timeout, or when FlakeRadar itself is
+interrupted, terminated, hung up on or finds its output pipe closed (`FlakeRadar -v
 ... | head`), the whole group is killed, so `go test`'s test binaries and every
 stage of a pipeline go with it. Only a SIGKILL, which can't be caught, leaves
 the runs in flight running. Timed-out runs count as failures but are left out
 of the timing numbers, since their duration is just the limit.
 
 A run's duration ends when the command exits. If it leaves something running in
-the background that keeps its output open, flaky reads on for up to 2 seconds,
+the background that keeps its output open, FlakeRadar reads on for up to 2 seconds,
 but that time doesn't count toward the duration or the timeout.
 
 ## JSON
@@ -196,11 +196,11 @@ leaving out warmup and timed-out runs.
 
 ## Platform notes
 
-flaky runs on Linux and macOS. Process groups, killing a whole group on a
+FlakeRadar runs on Linux and macOS. Process groups, killing a whole group on a
 timeout and reporting signals (`killed by SIGSEGV`) rely on Unix; built for
 another system it still works, but a timeout kills only the top process.
 
-Commands run with flaky's environment and working directory, stdin connected
+Commands run with FlakeRadar's environment and working directory, stdin connected
 to `/dev/null`. There is no config file and no environment variables to set.
 
 ## Exit status

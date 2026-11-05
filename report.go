@@ -8,8 +8,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/dan2756/flaky/internal/runner"
-	"github.com/dan2756/flaky/internal/stats"
+	"github.com/dan2756/FlakeRadar/internal/runner"
+	"github.com/dan2756/FlakeRadar/internal/stats"
 )
 
 const (
