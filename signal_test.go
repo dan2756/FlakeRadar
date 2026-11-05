@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// TestMain lets a test run this binary as flaky itself, to see what the
+// TestMain lets a test run this binary as FlakeRadar itself, to see what the
 // whole process does when it gets a signal.
 func TestMain(m *testing.M) {
 	if os.Getenv("FLAKY_TEST_MAIN") == "1" {
@@ -52,8 +52,8 @@ func runPids(t *testing.T, file string, n int) []int {
 	return nil
 }
 
-// checkRunsGone waits for flaky to exit and checks that the runs went with
-// it.
+// checkRunsGone waits for FlakeRadar to exit and checks that the runs went
+// with it.
 func checkRunsGone(t *testing.T, flaky *exec.Cmd, pids []int) {
 	t.Helper()
 	exited := make(chan struct{})
@@ -65,11 +65,11 @@ func checkRunsGone(t *testing.T, flaky *exec.Cmd, pids []int) {
 	case <-exited:
 	case <-time.After(10 * time.Second):
 		flaky.Process.Kill()
-		t.Error("flaky did not exit")
+		t.Error("FlakeRadar did not exit")
 	}
 	for _, pid := range pids {
 		if syscall.Kill(pid, 0) == nil {
-			t.Errorf("run with pid %d outlived flaky", pid)
+			t.Errorf("run with pid %d outlived FlakeRadar", pid)
 			syscall.Kill(-pid, syscall.SIGKILL)
 		}
 	}
@@ -87,7 +87,7 @@ func TestHangupKillsRuns(t *testing.T) {
 }
 
 func TestClosedOutputKillsRuns(t *testing.T) {
-	// As in flaky -v ... | head: whoever read flaky's output is gone.
+	// As in FlakeRadar -v ... | head: whoever read FlakeRadar's output is gone.
 	// The runs ignore SIGPIPE themselves, so they would carry on.
 	r, w, err := os.Pipe()
 	if err != nil {

@@ -6,7 +6,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/dan2756/flaky/internal/runner"
+	"github.com/dan2756/FlakeRadar/internal/runner"
 )
 
 // lockedWriter serializes writes from runs that finish lines at the same

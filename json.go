@@ -6,7 +6,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/dan2756/flaky/internal/runner"
+	"github.com/dan2756/FlakeRadar/internal/runner"
 )
 
 type jsonReport struct {

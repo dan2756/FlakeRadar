@@ -1,4 +1,4 @@
-module github.com/dan2756/flaky
+module github.com/dan2756/FlakeRadar
 
 go 1.24.0
 

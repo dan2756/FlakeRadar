@@ -29,7 +29,7 @@ type options struct {
 
 func parseArgs(args []string) (*options, error) {
 	o := &options{}
-	fs := flag.NewFlagSet("flaky", flag.ContinueOnError)
+	fs := flag.NewFlagSet("FlakeRadar", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
 
