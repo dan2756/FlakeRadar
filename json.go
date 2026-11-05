@@ -94,6 +94,10 @@ func writeJSON(w io.Writer, opts *options, results []runner.Result, s summary) e
 
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
+	// The default escapes <, > and & so the text can be embedded in HTML.
+	// This is a report of the command that ran, so leave those characters
+	// as they were written.
+	enc.SetEscapeHTML(false)
 	return enc.Encode(rep)
 }
 

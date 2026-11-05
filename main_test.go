@@ -171,6 +171,23 @@ func TestJSONPassRateDoesNotHideExtremes(t *testing.T) {
 	}
 }
 
+func TestJSONDoesNotEscapeHTML(t *testing.T) {
+	code, out, _ := flaky(t, "--json", "-n", "1", "--", "echo", "a<b>&c")
+	if code != 0 {
+		t.Fatalf("exit code %d, want 0\n%s", code, out)
+	}
+	if strings.Contains(out, `\u003c`) || strings.Contains(out, `\u003e`) || strings.Contains(out, `\u0026`) {
+		t.Fatalf("JSON HTML-escaped the command:\n%s", out)
+	}
+	var rep jsonReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if rep.Command != "echo 'a<b>&c'" || !slices.Equal(rep.Argv, []string{"echo", "a<b>&c"}) {
+		t.Fatalf("command = %q argv = %q", rep.Command, rep.Argv)
+	}
+}
+
 func TestJSONTimeout(t *testing.T) {
 	code, out, _ := flaky(t, "--json", "-n", "1", "--timeout", "50ms", "--", "sleep", "5")
 	if code != 1 {
