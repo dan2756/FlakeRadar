@@ -48,6 +48,31 @@ func TestPrefixWriter(t *testing.T) {
 	}
 }
 
+func TestPrefixWriterExactBoundary(t *testing.T) {
+	// io.Copy hands the tee 32 KiB at a time, so a line of exactly maxLine
+	// bytes is flushed, and the newline that ends it arrives afterwards.
+	var buf bytes.Buffer
+	w := newPrefixWriter(&buf, "[1] ")
+	if _, err := w.Write(bytes.Repeat([]byte("x"), maxLine)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("\n\nnext\n")); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want the long line, one blank line, then next", len(lines))
+	}
+	if want := "[1] " + strings.Repeat("x", maxLine); lines[0] != want {
+		t.Errorf("first line is %d bytes, want %d", len(lines[0]), len(want))
+	}
+	if lines[1] != "[1] " || lines[2] != "[1] next" {
+		t.Errorf("following lines = %q, %q", lines[1], lines[2])
+	}
+}
+
 func TestPrefixWriterLongLine(t *testing.T) {
 	var buf bytes.Buffer
 	w := newPrefixWriter(&buf, "[1] ")

@@ -26,11 +26,14 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 // a prefix, so that concurrent runs streaming to the same place stay
 // readable. A partial last line is held until it is finished or Close, or
 // until it reaches maxLine bytes, which are then passed on as a line of
-// their own.
+// their own. The newline that later finishes that piece is not another line.
 type prefixWriter struct {
 	w      io.Writer
 	prefix []byte
 	buf    []byte
+	// split is set when the current line was flushed at maxLine, so the
+	// newline that actually ends it must not be written out as a blank line.
+	split bool
 }
 
 // maxLine bounds how much of an unfinished line prefixWriter holds, so
@@ -48,14 +51,23 @@ func (p *prefixWriter) Write(b []byte) (int, error) {
 		if i < 0 {
 			break
 		}
+		// The line was already flushed at maxLine, with a newline added
+		// then. This one ends it; it is not a blank line of its own.
+		if p.split && len(p.buf) == 0 && i == 0 {
+			p.split = false
+			b = b[1:]
+			continue
+		}
 		p.emit(append(p.buf, b[:i+1]...))
 		p.buf = p.buf[:0]
+		p.split = false
 		b = b[i+1:]
 	}
 	p.buf = append(p.buf, b...)
 	for len(p.buf) >= maxLine {
 		p.emit(append(p.buf[:maxLine:maxLine], '\n'))
 		p.buf = p.buf[maxLine:]
+		p.split = true
 	}
 	// Errors writing the copy are not the command's problem; never let
 	// them fail the run.
