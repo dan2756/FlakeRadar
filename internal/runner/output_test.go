@@ -23,6 +23,22 @@ func TestTailBuffer(t *testing.T) {
 	}
 }
 
+func TestTailBufferKeepsLonePartialLine(t *testing.T) {
+	// One line longer than the window, the way print and echo end it.
+	// The tail is only the end of that line; discarding it up to the
+	// newline used to leave nothing.
+	b := newTailBuffer(8)
+	line := append(bytes.Repeat([]byte("x"), 30), '\n')
+	b.Write(line)
+	got := b.Bytes()
+	if string(got) != "xxxxxxx\n" {
+		t.Fatalf("got %q, want the tail of the only line", got)
+	}
+	if b.dropped+int64(len(got)) != int64(len(line)) {
+		t.Fatalf("dropped %d + kept %d != %d written", b.dropped, len(got), len(line))
+	}
+}
+
 func TestTailBufferBigWrite(t *testing.T) {
 	b := newTailBuffer(1000)
 	data := bytes.Repeat([]byte("0123456789abcdef\n"), 1000) // 17000 bytes
