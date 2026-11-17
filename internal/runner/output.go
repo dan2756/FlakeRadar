@@ -37,10 +37,12 @@ func (t *tailBuffer) trim() {
 
 // Bytes returns what is kept. If anything was dropped, it starts at the
 // first complete line, and the partial line is counted as dropped too.
+// When that partial line is all that remains, it is kept: a run that
+// printed one long line would otherwise look like it printed nothing.
 func (t *tailBuffer) Bytes() []byte {
 	t.trim()
 	if t.dropped > 0 {
-		if i := bytes.IndexByte(t.buf, '\n'); i >= 0 {
+		if i := bytes.IndexByte(t.buf, '\n'); i >= 0 && i+1 < len(t.buf) {
 			t.dropped += int64(i + 1)
 			t.buf = t.buf[i+1:]
 		}
